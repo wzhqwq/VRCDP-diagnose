@@ -137,9 +137,14 @@ func (m *diagnosticManager) BeginRequest(ctx context.Context, info RequestStart)
 	if isZeroTimePoint(info.Time) {
 		info.Time = m.Now()
 	}
+	requestID := info.RequestID
+	if requestID == "" {
+		requestID = newID("request")
+	}
+	info.RequestID = requestID
 	ref := RequestRef{
 		SessionID: m.sessionID,
-		RequestID: newID("request"),
+		RequestID: requestID,
 	}
 	if err := m.store.BeginRequest(ctx, ref, info); err != nil {
 		return RequestRef{}, err

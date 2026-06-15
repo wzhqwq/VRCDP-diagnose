@@ -30,6 +30,7 @@ var (
 	requestsTable = db_vc.DefTable("diagnose_requests").DefColumns(
 		db_vc.NewText("request_id").SetPrimary(),
 		db_vc.NewText("session_id").SetIndexed(),
+		db_vc.NewText("resource_id").SetIndexed(),
 		db_vc.NewInt("start_process_uptime_ns").SetIndexed(),
 		db_vc.NewInt("end_process_uptime_ns").SetIndexed(),
 		db_vc.NewText("start_json"),

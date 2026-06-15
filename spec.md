@@ -40,11 +40,12 @@ For the current MVP skeleton:
 
 ```text
 Implement package diagnose.
-Implement an API-only manager skeleton.
+Implement an API-only manager.
 Do not implement frontend assets or HTML UI yet.
-Leave concrete SQLite persistence blank for now because the main project already owns SQLite integration.
+Do not include server ownership, listener, port, or route-prefix state in diagnose.
+Expose only an http.Handler; the main project mounts it on its existing server/router.
+Use db_vc-backed SQLite table definitions and storage; the main project owns the SQLite connection and calls db_vc.Init.
 Do not add JSONL or in-memory persistence as a temporary replacement.
-Non-stats query APIs may return empty JSON placeholders until real storage is wired in.
 ```
 
 ---
@@ -56,12 +57,10 @@ type Config struct {
 	Enabled                  bool
 	SessionLabel             string
 	StoragePath              string
-	FrontendEnabled          bool
 	ChunkLoggingEnabled      bool
 	WindowAggregationEnabled bool
 	QueueSize                int
 	DropOnOverflow           bool
-	HTTPPrefix               string
 
 	WindowSizes []time.Duration
 }
@@ -72,12 +71,10 @@ Expected behavior:
 ```text
 Enabled=false should make diagnostics effectively no-op.
 StoragePath defines where diagnostic data should be stored.
-FrontendEnabled controls whether the local analysis UI should be exposed.
 ChunkLoggingEnabled controls high-volume per-chunk logging.
 WindowAggregationEnabled controls short-window metrics generation.
 QueueSize controls the internal async event queue.
 DropOnOverflow=true means diagnostics should drop events rather than blocking video serving.
-HTTPPrefix is the route prefix for diagnostics UI/API.
 WindowSizes defines aggregation windows such as 5ms, 16.667ms, 50ms, 100ms, etc.
 ```
 
@@ -119,7 +116,7 @@ RecordChunk must be safe to call frequently.
 RecordChunk should enqueue events asynchronously.
 If the queue is full and DropOnOverflow=true, drop diagnostic events and increment a dropped counter.
 Shutdown should flush pending events where possible.
-HTTPHandler should serve both API routes and the frontend when enabled.
+HTTPHandler should expose diagnostics API routes only. The main project owns the HTTP server and route mounting.
 ```
 
 ---
@@ -218,6 +215,9 @@ func (r RequestRef) IsZero() bool
 type RequestStart struct {
 	Time TimePoint `json:"time"`
 
+	RequestID  string `json:"request_id,omitempty"`
+	ResourceID string `json:"resource_id,omitempty"`
+
 	ConnectionID string `json:"connection_id,omitempty"`
 
 	ClientIP  string `json:"client_ip"`
@@ -252,6 +252,8 @@ Requirements:
 
 ```text
 One RequestStart record must be written when a video request begins.
+RequestID may be supplied by the main project; if empty, diagnose generates one.
+ResourceID should identify the cached/video resource being served when available.
 RangeHeader should be logged even though Range is not currently supported.
 HTTPProto, TLS, and ALPN must be visible in the UI because protocol behavior may affect transfer pacing.
 ```
@@ -458,6 +460,33 @@ BurstPolicy
 ```
 
 TLS decoding should convert Go TLS constants into readable strings where possible.
+
+---
+
+## 3.1 ReadSeeker Helper For ServeContent
+
+The main project may serve cached files by wrapping an `io.ReadSeeker` in a pacing reader and passing it to `http.ServeContent`.
+
+For that integration, diagnose should expose:
+
+```go
+type ReadSeekerOptions struct {
+	StartingSeq int64
+}
+
+func WrapReadSeeker(m Manager, req RequestRef, r io.ReadSeeker, opts ReadSeekerOptions) io.ReadSeeker
+```
+
+Expected behavior:
+
+```text
+Return the original reader when manager is nil, disabled, request ref is zero, or reader is nil.
+Preserve io.ReadSeeker behavior for http.ServeContent.
+Record one ChunkEvent per successful Read.
+Record read timing and read byte counts.
+Use read bytes as WriteBytes proxy because ServeContent owns the socket write/flush loop.
+Leave write and flush timing fields zero because they are not observable from a ReadSeeker wrapper.
+```
 
 ---
 
@@ -778,9 +807,9 @@ GET  /api/sessions/{session_id}/timeline
 
 # 7. Frontend Requirements
 
-The frontend should be served by `Manager.HTTPHandler()` when `FrontendEnabled=true`.
+The `diagnose` package does not serve frontend assets.
 
-The frontend can be simple but must support analysis.
+The main project may add a frontend later by mounting its own UI on the existing server and consuming the diagnostics JSON API.
 
 ---
 

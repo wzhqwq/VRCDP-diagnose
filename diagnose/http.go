@@ -16,11 +16,7 @@ func newAPIHandler(manager *diagnosticManager) http.Handler {
 }
 
 func (h apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	path := h.apiPath(r.URL.Path)
-	if path == "" {
-		http.NotFound(w, r)
-		return
-	}
+	path := r.URL.Path
 
 	switch {
 	case path == "/api/stats":
@@ -40,21 +36,6 @@ func (h apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
-}
-
-func (h apiHandler) apiPath(path string) string {
-	prefix := strings.TrimRight(h.manager.cfg.HTTPPrefix, "/")
-	if prefix == "" || prefix == "/" {
-		return path
-	}
-	if !strings.HasPrefix(path, prefix) {
-		return ""
-	}
-	trimmed := strings.TrimPrefix(path, prefix)
-	if trimmed == "" {
-		return "/"
-	}
-	return trimmed
 }
 
 func (h apiHandler) handleStats(w http.ResponseWriter, r *http.Request) {

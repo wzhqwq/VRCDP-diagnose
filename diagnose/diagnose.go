@@ -16,12 +16,10 @@ type Config struct {
 	Enabled                  bool
 	SessionLabel             string
 	StoragePath              string
-	FrontendEnabled          bool
 	ChunkLoggingEnabled      bool
 	WindowAggregationEnabled bool
 	QueueSize                int
 	DropOnOverflow           bool
-	HTTPPrefix               string
 
 	WindowSizes []time.Duration
 }
@@ -92,6 +90,9 @@ func (r RequestRef) IsZero() bool {
 
 type RequestStart struct {
 	Time TimePoint `json:"time"`
+
+	RequestID  string `json:"request_id,omitempty"`
+	ResourceID string `json:"resource_id,omitempty"`
 
 	ConnectionID string `json:"connection_id,omitempty"`
 

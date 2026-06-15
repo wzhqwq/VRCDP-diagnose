@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -73,6 +74,64 @@ func TestRecordChunkDropOnOverflowCounters(t *testing.T) {
 	}
 	if stats.ChunkEventsDropped != 1 {
 		t.Fatalf("dropped chunks = %d, want 1", stats.ChunkEventsDropped)
+	}
+}
+
+func TestBeginRequestUsesProvidedRequestID(t *testing.T) {
+	m := newDiagnosticManager(Config{Enabled: true}, testStore{})
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	defer func() {
+		if err := m.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown returned error: %v", err)
+		}
+	}()
+
+	ref, err := m.BeginRequest(context.Background(), RequestStart{
+		RequestID:  "cdn-request-123",
+		ResourceID: "video-cache-key-456",
+	})
+	if err != nil {
+		t.Fatalf("BeginRequest returned error: %v", err)
+	}
+	if ref.RequestID != "cdn-request-123" {
+		t.Fatalf("RequestID = %q, want provided ID", ref.RequestID)
+	}
+}
+
+func TestWrapReadSeekerRecordsChunk(t *testing.T) {
+	m := newDiagnosticManager(Config{Enabled: true, QueueSize: 4}, testStore{})
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	defer func() {
+		if err := m.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown returned error: %v", err)
+		}
+	}()
+
+	ref := RequestRef{SessionID: m.SessionID(), RequestID: "request_test"}
+	wrapped := WrapReadSeeker(m, ref, bytes.NewReader([]byte("hello")), ReadSeekerOptions{})
+	buf := make([]byte, 2)
+	n, err := wrapped.Read(buf)
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("Read bytes = %d, want 2", n)
+	}
+	pos, err := wrapped.Seek(0, io.SeekStart)
+	if err != nil {
+		t.Fatalf("Seek returned error: %v", err)
+	}
+	if pos != 0 {
+		t.Fatalf("Seek position = %d, want 0", pos)
+	}
+
+	stats := m.RuntimeStats()
+	if stats.ChunkEventsRecorded != 1 {
+		t.Fatalf("recorded chunks = %d, want 1", stats.ChunkEventsRecorded)
 	}
 }
 

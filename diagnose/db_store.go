@@ -69,10 +69,10 @@ func initStoreSQL() {
 			flush_policy, notes
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		insertRequest: `INSERT OR REPLACE INTO diagnose_requests (
-			request_id, session_id, start_process_uptime_ns, end_process_uptime_ns,
+			request_id, session_id, resource_id, start_process_uptime_ns, end_process_uptime_ns,
 			start_json, end_json, incomplete, response_status, total_bytes_sent,
 			duration_ns, error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		endRequest: `UPDATE diagnose_requests SET
 			end_process_uptime_ns = ?, end_json = ?, incomplete = ?,
 			response_status = ?, total_bytes_sent = ?, duration_ns = ?, error = ?
@@ -187,6 +187,7 @@ func (s *dbVCStore) BeginRequest(ctx context.Context, ref RequestRef, info Reque
 	_, err = safeExec(requestsTable, storeSQL.insertRequest,
 		ref.RequestID,
 		ref.SessionID,
+		info.ResourceID,
 		info.Time.ProcessUptimeNs,
 		nil,
 		startJSON,

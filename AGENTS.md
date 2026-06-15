@@ -20,11 +20,12 @@ Implement diagnostics in package `diagnose`.
 
 Current phase:
 
-- API-only manager skeleton.
-- No frontend assets or HTML UI.
-- Keep SQLite persistence intentionally blank for now; the main project already owns SQLite integration.
-- Do not add JSONL or in-memory persistence as a temporary replacement.
-- Non-stats query APIs may return empty JSON placeholders until real storage is wired in.
+- API-only diagnostics manager with `db_vc`-backed SQLite table definitions and storage.
+- Expose `diagnose.Tables` to the host database initialization path and call `diagnose.Init()` after `db_vc.Init(...)`.
+- Sessions, pacing profiles, requests, chunk events, window metrics, markers, and glitches are persisted through `db_vc.Table` helpers.
+- No frontend assets or HTML UI yet.
+- JSONL and ad hoc in-memory persistence are intentionally not used.
+- Next likely phase is integration testing against the main project's real SQLite connection and then frontend/timeline polish.
 
 # Version-Controlled Database Interface
 

@@ -41,9 +41,9 @@ For the current MVP skeleton:
 ```text
 Implement package diagnose.
 Implement an API-only manager.
-Do not implement frontend assets or HTML UI yet.
+Implement the separate frontend timeline phase; keep UI assets outside package `diagnose`.
 Do not include server ownership, listener, port, or route-prefix state in diagnose.
-Expose only an http.Handler; the main project mounts it on its existing server/router.
+Expose only an http.Handler for diagnostics APIs; the frontend is mounted separately by the host and consumes those JSON APIs.
 Use db_vc-backed SQLite table definitions and storage; the main project owns the SQLite connection and calls db_vc.Init.
 Do not add JSONL or in-memory persistence as a temporary replacement.
 ```
@@ -829,7 +829,27 @@ GET  /api/sessions/{session_id}/timeline
 
 The `diagnose` package does not serve frontend assets.
 
-The main project may add a frontend later by mounting its own UI on the existing server and consuming the diagnostics JSON API.
+The current frontend phase builds a separate Svelte 5 + TypeScript + D3.js UI that the host may mount on its existing server. The UI consumes the diagnostics JSON API exposed by `diagnose.HTTPHandler()`.
+
+Required layout:
+
+```text
+Session list on the left.
+Current session workspace on the right.
+Main timeline in the current session workspace.
+Zoomed timeline and selected-range details at the bottom of the current session workspace.
+```
+
+Required visualization technique:
+
+```text
+Use D3.js for any stacking view, timeline, zoom view, or diagram.
+The main timeline must contain all visible telemetry for the selected session.
+Group displayed requests by resource_id, falling back to URL path and then request_id.
+Color resource groups in two alternating colors.
+Allow selecting a range on the main timeline.
+Use the selected range to render the bottom zoomed view and detail summaries.
+```
 
 ---
 

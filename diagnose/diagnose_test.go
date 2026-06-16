@@ -323,6 +323,36 @@ func TestAPIStatsMarkersAndGlitches(t *testing.T) {
 	}
 }
 
+func TestAPITimelinePassesRangeAndWindowQuery(t *testing.T) {
+	st := &timelineRecordingStore{}
+	m := newDiagnosticManager(Config{Enabled: true}, st)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	defer func() {
+		if err := m.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown returned error: %v", err)
+		}
+	}()
+	handler := m.HTTPHandler()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/session_test/timeline?from_ns=1000&to_ns=9000&window_ms=50", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("GET timeline status = %d, want %d; body=%s", res.Code, http.StatusOK, res.Body.String())
+	}
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.sessionID != "session_test" {
+		t.Fatalf("timeline session = %q, want session_test", st.sessionID)
+	}
+	if st.query.FromNs != 1000 || st.query.ToNs != 9000 || st.query.WindowMS != 50 {
+		t.Fatalf("timeline query = %+v, want from=1000 to=9000 window=50", st.query)
+	}
+}
+
 func TestRequestStartFromHTTP(t *testing.T) {
 	profile := PacingProfile{
 		Name:         "30mbps_tick5ms",
@@ -435,7 +465,7 @@ func (s testStore) ListGlitches(ctx context.Context, sessionID string) ([]glitch
 	return []glitchSummary{}, nil
 }
 
-func (s testStore) GetTimeline(ctx context.Context, sessionID string) (timelineSummary, error) {
+func (s testStore) GetTimeline(ctx context.Context, sessionID string, query timelineQuery) (timelineSummary, error) {
 	return timelineSummary{SessionID: sessionID}, nil
 }
 
@@ -474,4 +504,19 @@ func (s *batchRecordingStore) RecordChunks(ctx context.Context, records []chunkR
 	copied := append([]chunkRecord(nil), records...)
 	s.batches = append(s.batches, copied)
 	return nil
+}
+
+type timelineRecordingStore struct {
+	testStore
+	mu        sync.Mutex
+	sessionID string
+	query     timelineQuery
+}
+
+func (s *timelineRecordingStore) GetTimeline(ctx context.Context, sessionID string, query timelineQuery) (timelineSummary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionID = sessionID
+	s.query = query
+	return timelineSummary{SessionID: sessionID}, nil
 }

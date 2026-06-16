@@ -65,3 +65,9 @@ Query usage notes:
 - Prefer the quick builders `Select`, `Insert`, `Update`, and `Delete` for table-owned SQL so column names are checked against the declared schema.
 - `Delete().Build()` without `Where(...)` is forbidden and fatal.
 - `StableSort` requires a primary key and warns if the stable order is not indexed.
+
+# Frontend
+
+The frontend lives in `frontend/` and is a Svelte 5 + TypeScript + Tailwind app built with Vite.
+
+When dealing with frontend files, load `frontend/AGENTS.md` first. And write frontend-related designs to `frontend/AGENTS.md`.

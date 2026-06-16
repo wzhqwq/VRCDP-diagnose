@@ -99,7 +99,12 @@ func (h apiHandler) handleSessionRoute(w http.ResponseWriter, r *http.Request, r
 		if !allowMethod(w, r, http.MethodGet) {
 			return
 		}
-		timeline, err := h.manager.store.GetTimeline(r.Context(), sessionID)
+		query, err := parseTimelineQuery(r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		timeline, err := h.manager.store.GetTimeline(r.Context(), sessionID, query)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -293,4 +298,41 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func parseTimelineQuery(r *http.Request) (timelineQuery, error) {
+	query := timelineQuery{WindowMS: 100}
+	values := r.URL.Query()
+
+	if raw := values.Get("from_ns"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			return timelineQuery{}, errInvalidQuery("invalid from_ns")
+		}
+		query.FromNs = parsed
+	}
+	if raw := values.Get("to_ns"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			return timelineQuery{}, errInvalidQuery("invalid to_ns")
+		}
+		query.ToNs = parsed
+	}
+	if query.FromNs > 0 && query.ToNs > 0 && query.FromNs > query.ToNs {
+		return timelineQuery{}, errInvalidQuery("from_ns must be <= to_ns")
+	}
+	if raw := values.Get("window_ms"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			return timelineQuery{}, errInvalidQuery("invalid window_ms")
+		}
+		query.WindowMS = parsed
+	}
+	return query, nil
+}
+
+type errInvalidQuery string
+
+func (e errInvalidQuery) Error() string {
+	return string(e)
 }

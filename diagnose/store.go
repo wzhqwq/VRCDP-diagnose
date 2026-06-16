@@ -22,7 +22,7 @@ type store interface {
 	ListWindows(ctx context.Context, requestID string, windowMS int) ([]windowMetric, error)
 	ListMarkers(ctx context.Context, sessionID string) ([]markerSummary, error)
 	ListGlitches(ctx context.Context, sessionID string) ([]glitchSummary, error)
-	GetTimeline(ctx context.Context, sessionID string) (timelineSummary, error)
+	GetTimeline(ctx context.Context, sessionID string, query timelineQuery) (timelineSummary, error)
 
 	Close(ctx context.Context) error
 }
@@ -82,6 +82,12 @@ type timelineSummary struct {
 	Windows   []windowMetric   `json:"windows"`
 	Markers   []markerSummary  `json:"markers"`
 	Glitches  []glitchSummary  `json:"glitches"`
+}
+
+type timelineQuery struct {
+	FromNs   int64
+	ToNs     int64
+	WindowMS int
 }
 
 type markerSummary struct {

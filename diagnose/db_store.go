@@ -94,6 +94,20 @@ var listWindows = windowMetricsTable.Select(
 	"bytes_sent", "effective_mbps", "write_count", "max_read_duration_ns",
 	"max_flush_duration_ns", "max_sleep_actual_ns", "min_allowance", "max_allowance",
 ).Where("request_id = ? AND window_ms = ?").Sort("window_start_ns", true).Build()
+var listTimelineRequests = `SELECT request_id, session_id, start_json, end_json, incomplete
+	FROM diagnose_requests
+	WHERE session_id = ?
+		AND (? <= 0 OR start_process_uptime_ns <= ?)
+		AND (? <= 0 OR end_process_uptime_ns IS NULL OR end_process_uptime_ns = 0 OR end_process_uptime_ns >= ?)
+	ORDER BY start_process_uptime_ns`
+var listTimelineWindows = `SELECT session_id, request_id, window_ms, window_start_ns, window_end_ns,
+	bytes_sent, effective_mbps, write_count, max_read_duration_ns,
+	max_flush_duration_ns, max_sleep_actual_ns, min_allowance, max_allowance
+	FROM diagnose_window_metrics
+	WHERE session_id = ? AND window_ms = ?
+		AND (? <= 0 OR window_end_ns >= ?)
+		AND (? <= 0 OR window_start_ns <= ?)
+	ORDER BY window_start_ns`
 var listMarkers = markersTable.Select("marker_id", "event_json").Where("session_id = ?").Sort("process_uptime_ns", true).Build()
 var listGlitches = glitchesTable.Select("glitch_id", "event_json").Where("session_id = ?").Sort("process_uptime_ns", true).Build()
 
@@ -482,8 +496,12 @@ func scanEventSummaries[E any, S any](rows *sql.Rows, build func(id string, even
 	return summaries, rows.Err()
 }
 
-func (s *dbVCStore) GetTimeline(ctx context.Context, sessionID string) (timelineSummary, error) {
-	requests, err := s.ListRequests(ctx, sessionID)
+func (s *dbVCStore) GetTimeline(ctx context.Context, sessionID string, query timelineQuery) (timelineSummary, error) {
+	requests, err := s.listTimelineRequests(ctx, sessionID, query)
+	if err != nil {
+		return timelineSummary{}, err
+	}
+	windows, err := s.listTimelineWindows(ctx, sessionID, query)
 	if err != nil {
 		return timelineSummary{}, err
 	}
@@ -498,10 +516,103 @@ func (s *dbVCStore) GetTimeline(ctx context.Context, sessionID string) (timeline
 	return timelineSummary{
 		SessionID: sessionID,
 		Requests:  requests,
-		Windows:   []windowMetric{},
-		Markers:   markers,
-		Glitches:  glitches,
+		Windows:   windows,
+		Markers:   filterMarkersByRange(markers, query),
+		Glitches:  filterGlitchesByRange(glitches, query),
 	}, nil
+}
+
+func (s *dbVCStore) listTimelineRequests(ctx context.Context, sessionID string, query timelineQuery) ([]requestSummary, error) {
+	rows, err := safeQuery(ctx, requestsTable, listTimelineRequests,
+		sessionID,
+		query.ToNs, query.ToNs,
+		query.FromNs, query.FromNs,
+	)
+	if err != nil {
+		return nil, normalizeStoreErr(err)
+	}
+	defer rows.Close()
+	return scanRequests(rows)
+}
+
+func (s *dbVCStore) listTimelineWindows(ctx context.Context, sessionID string, query timelineQuery) ([]windowMetric, error) {
+	windowMS := query.WindowMS
+	if windowMS <= 0 {
+		windowMS = 100
+	}
+	rows, err := safeQuery(ctx, windowMetricsTable, listTimelineWindows,
+		sessionID,
+		windowMS,
+		query.FromNs, query.FromNs,
+		query.ToNs, query.ToNs,
+	)
+	if err != nil {
+		return nil, normalizeStoreErr(err)
+	}
+	defer rows.Close()
+
+	var windows []windowMetric
+	for rows.Next() {
+		var w windowMetric
+		if err := rows.Scan(
+			&w.SessionID,
+			&w.RequestID,
+			&w.WindowMS,
+			&w.WindowStartNs,
+			&w.WindowEndNs,
+			&w.BytesSent,
+			&w.EffectiveMbps,
+			&w.WriteCount,
+			&w.MaxReadDurationNs,
+			&w.MaxFlushDurationNs,
+			&w.MaxSleepActualNs,
+			&w.MinAllowance,
+			&w.MaxAllowance,
+		); err != nil {
+			return nil, err
+		}
+		windows = append(windows, w)
+	}
+	return windows, rows.Err()
+}
+
+func filterMarkersByRange(markers []markerSummary, query timelineQuery) []markerSummary {
+	if query.FromNs <= 0 && query.ToNs <= 0 {
+		return markers
+	}
+	filtered := markers[:0]
+	for _, marker := range markers {
+		if inTimelineRange(marker.Marker.Time.ProcessUptimeNs, query) {
+			filtered = append(filtered, marker)
+		}
+	}
+	return filtered
+}
+
+func filterGlitchesByRange(glitches []glitchSummary, query timelineQuery) []glitchSummary {
+	if query.FromNs <= 0 && query.ToNs <= 0 {
+		return glitches
+	}
+	filtered := glitches[:0]
+	for _, glitch := range glitches {
+		if inTimelineRange(glitch.Glitch.Time.ProcessUptimeNs, query) {
+			filtered = append(filtered, glitch)
+		}
+	}
+	return filtered
+}
+
+func inTimelineRange(processUptimeNs int64, query timelineQuery) bool {
+	if processUptimeNs <= 0 {
+		return false
+	}
+	if query.FromNs > 0 && processUptimeNs < query.FromNs {
+		return false
+	}
+	if query.ToNs > 0 && processUptimeNs > query.ToNs {
+		return false
+	}
+	return true
 }
 
 func (s *dbVCStore) Close(ctx context.Context) error {

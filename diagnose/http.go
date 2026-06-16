@@ -4,38 +4,42 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"strings"
 )
 
 type apiHandler struct {
 	manager *diagnosticManager
+	mux     *http.ServeMux
 }
 
 func newAPIHandler(manager *diagnosticManager) http.Handler {
-	return apiHandler{manager: manager}
+	h := apiHandler{
+		manager: manager,
+		mux:     http.NewServeMux(),
+	}
+	h.RegisterHandlers()
+	return h
+}
+
+func (h apiHandler) RegisterHandlers() {
+	h.mux.HandleFunc("/api/stats", h.handleStats)
+	h.mux.HandleFunc("/api/sessions", h.handleSessions)
+	h.mux.HandleFunc("/api/sessions/{session_id}", h.handleSession)
+	h.mux.HandleFunc("/api/sessions/{session_id}/requests", h.handleSessionRequests)
+	h.mux.HandleFunc("/api/sessions/{session_id}/timeline", h.handleSessionTimeline)
+	h.mux.HandleFunc("/api/sessions/{session_id}/markers", h.handleSessionMarkers)
+	h.mux.HandleFunc("/api/sessions/{session_id}/glitches", h.handleSessionGlitches)
+	h.mux.HandleFunc("/api/markers", h.handleMarkers)
+	h.mux.HandleFunc("/api/glitches", h.handleGlitches)
+	h.mux.HandleFunc("/api/glitches/{glitch_id}", h.handleGlitch)
+	h.mux.HandleFunc("/api/requests/{request_id}", h.handleRequest)
+	h.mux.HandleFunc("/api/requests/{request_id}/windows", h.handleRequestWindows)
+	h.mux.HandleFunc("/api/requests/{request_id}/chunks", h.handleRequestChunks)
+	h.mux.Handle("/api/", http.NotFoundHandler())
+	h.mux.Handle("/", http.FileServerFS(staticFS{}))
 }
 
 func (h apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-
-	switch {
-	case path == "/api/stats":
-		h.handleStats(w, r)
-	case path == "/api/sessions":
-		h.handleSessions(w, r)
-	case strings.HasPrefix(path, "/api/sessions/"):
-		h.handleSessionRoute(w, r, strings.TrimPrefix(path, "/api/sessions/"))
-	case path == "/api/markers":
-		h.handleMarkers(w, r)
-	case path == "/api/glitches":
-		h.handleGlitches(w, r)
-	case strings.HasPrefix(path, "/api/glitches/"):
-		h.handleGlitchRoute(w, r, strings.TrimPrefix(path, "/api/glitches/"))
-	case strings.HasPrefix(path, "/api/requests/"):
-		h.handleRequestRoute(w, r, strings.TrimPrefix(path, "/api/requests/"))
-	default:
-		http.NotFound(w, r)
-	}
+	h.mux.ServeHTTP(w, r)
 }
 
 func (h apiHandler) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -57,152 +61,162 @@ func (h apiHandler) handleSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
 }
 
-func (h apiHandler) handleSessionRoute(w http.ResponseWriter, r *http.Request, route string) {
-	parts := strings.Split(strings.Trim(route, "/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
+func (h apiHandler) handleSession(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("session_id")
+	if sessionID == "" {
 		http.NotFound(w, r)
 		return
 	}
-	sessionID := parts[0]
-
-	if len(parts) == 1 {
-		if !allowMethod(w, r, http.MethodGet) {
-			return
-		}
-		session, ok, err := h.manager.store.GetSession(r.Context(), sessionID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if !ok {
-			writeError(w, http.StatusNotFound, "session not found")
-			return
-		}
-		writeJSON(w, http.StatusOK, session)
+	if !allowMethod(w, r, http.MethodGet) {
 		return
 	}
-
-	if len(parts) == 2 && parts[1] == "requests" {
-		if !allowMethod(w, r, http.MethodGet) {
-			return
-		}
-		requests, err := h.manager.store.ListRequests(r.Context(), sessionID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"requests": requests})
+	session, ok, err := h.manager.store.GetSession(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	if len(parts) == 2 && parts[1] == "timeline" {
-		if !allowMethod(w, r, http.MethodGet) {
-			return
-		}
-		query, err := parseTimelineQuery(r)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		timeline, err := h.manager.store.GetTimeline(r.Context(), sessionID, query)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, timeline)
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-
-	if len(parts) == 2 && parts[1] == "markers" {
-		if !allowMethod(w, r, http.MethodGet) {
-			return
-		}
-		markers, err := h.manager.store.ListMarkers(r.Context(), sessionID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"markers": markers})
-		return
-	}
-
-	if len(parts) == 2 && parts[1] == "glitches" {
-		if !allowMethod(w, r, http.MethodGet) {
-			return
-		}
-		glitches, err := h.manager.store.ListGlitches(r.Context(), sessionID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"glitches": glitches})
-		return
-	}
-
-	http.NotFound(w, r)
+	writeJSON(w, http.StatusOK, session)
 }
 
-func (h apiHandler) handleRequestRoute(w http.ResponseWriter, r *http.Request, route string) {
-	parts := strings.Split(strings.Trim(route, "/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
+func (h apiHandler) handleSessionRequests(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("session_id")
+	if sessionID == "" {
 		http.NotFound(w, r)
 		return
 	}
-	requestID := parts[0]
-
-	if len(parts) == 1 {
-		if !allowMethod(w, r, http.MethodGet) {
-			return
-		}
-		request, ok, err := h.manager.store.GetRequest(r.Context(), requestID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if !ok {
-			writeError(w, http.StatusNotFound, "request not found")
-			return
-		}
-		writeJSON(w, http.StatusOK, request)
+	if !allowMethod(w, r, http.MethodGet) {
 		return
 	}
-
-	if len(parts) == 2 && parts[1] == "windows" {
-		if !allowMethod(w, r, http.MethodGet) {
-			return
-		}
-		windowMS := 100
-		if raw := r.URL.Query().Get("window_ms"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid window_ms")
-				return
-			}
-			windowMS = parsed
-		}
-		windows, err := h.manager.store.ListWindows(r.Context(), requestID, windowMS)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"windows": windows})
+	requests, err := h.manager.store.ListRequests(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]any{"requests": requests})
+}
 
-	if len(parts) == 2 && parts[1] == "chunks" {
-		if !allowMethod(w, r, http.MethodGet) {
-			return
-		}
-		chunks, err := h.manager.store.ListChunks(r.Context(), requestID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"chunks": chunks})
+func (h apiHandler) handleSessionTimeline(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("session_id")
+	if sessionID == "" {
+		http.NotFound(w, r)
 		return
 	}
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
+	query, err := parseTimelineQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	timeline, err := h.manager.store.GetTimeline(r.Context(), sessionID, query)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, timeline)
+}
 
-	http.NotFound(w, r)
+func (h apiHandler) handleSessionMarkers(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("session_id")
+	if sessionID == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
+	markers, err := h.manager.store.ListMarkers(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"markers": markers})
+}
+
+func (h apiHandler) handleSessionGlitches(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("session_id")
+	if sessionID == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
+	glitches, err := h.manager.store.ListGlitches(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"glitches": glitches})
+}
+
+func (h apiHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
+	requestID := r.PathValue("request_id")
+	if requestID == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
+	request, ok, err := h.manager.store.GetRequest(r.Context(), requestID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "request not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, request)
+}
+
+func (h apiHandler) handleRequestWindows(w http.ResponseWriter, r *http.Request) {
+	requestID := r.PathValue("request_id")
+	if requestID == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
+	windowMS := 100
+	if raw := r.URL.Query().Get("window_ms"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid window_ms")
+			return
+		}
+		windowMS = parsed
+	}
+	windows, err := h.manager.store.ListWindows(r.Context(), requestID, windowMS)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"windows": windows})
+}
+
+func (h apiHandler) handleRequestChunks(w http.ResponseWriter, r *http.Request) {
+	requestID := r.PathValue("request_id")
+	if requestID == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
+	chunks, err := h.manager.store.ListChunks(r.Context(), requestID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"chunks": chunks})
 }
 
 func (h apiHandler) handleMarkers(w http.ResponseWriter, r *http.Request) {
@@ -239,8 +253,8 @@ func (h apiHandler) handleGlitches(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, glitchResponse{GlitchID: id})
 }
 
-func (h apiHandler) handleGlitchRoute(w http.ResponseWriter, r *http.Request, route string) {
-	glitchID := strings.Trim(route, "/")
+func (h apiHandler) handleGlitch(w http.ResponseWriter, r *http.Request) {
+	glitchID := r.PathValue("glitch_id")
 	if glitchID == "" {
 		http.NotFound(w, r)
 		return

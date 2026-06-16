@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -77,8 +78,9 @@ func TestRecordChunkDropOnOverflowCounters(t *testing.T) {
 	}
 }
 
-func TestBeginRequestUsesProvidedRequestID(t *testing.T) {
-	m := newDiagnosticManager(Config{Enabled: true}, testStore{})
+func TestBeginHTTPStoresProvidedRequestAndResourceID(t *testing.T) {
+	st := &recordingStore{}
+	m := newDiagnosticManager(Config{Enabled: true}, st)
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -88,20 +90,54 @@ func TestBeginRequestUsesProvidedRequestID(t *testing.T) {
 		}
 	}()
 
-	ref, err := m.BeginRequest(context.Background(), RequestStart{
-		RequestID:  "cdn-request-123",
-		ResourceID: "video-cache-key-456",
+	req := httptest.NewRequest(http.MethodGet, "https://example.test/video.mp4", nil)
+	ctx, ref, err := BeginHTTP(context.Background(), m, req, RequestOptions{
+		RequestID:      "cdn-request-123",
+		ResourceID:     "video-cache-key-456",
+		ResponseStatus: http.StatusOK,
+		ContentType:    "video/mp4",
+		ContentLength:  1234,
 	})
 	if err != nil {
-		t.Fatalf("BeginRequest returned error: %v", err)
+		t.Fatalf("BeginHTTP returned error: %v", err)
 	}
 	if ref.RequestID != "cdn-request-123" {
 		t.Fatalf("RequestID = %q, want provided ID", ref.RequestID)
 	}
+	fromCtx, ok := RequestRefFromContext(ctx)
+	if !ok {
+		t.Fatal("RequestRefFromContext did not find request ref")
+	}
+	if fromCtx != ref {
+		t.Fatalf("context ref = %+v, want %+v", fromCtx, ref)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.starts) != 1 {
+		t.Fatalf("stored starts = %d, want 1", len(st.starts))
+	}
+	if st.starts[0].RequestID != "cdn-request-123" || st.starts[0].ResourceID != "video-cache-key-456" {
+		t.Fatalf("stored start IDs = %q/%q", st.starts[0].RequestID, st.starts[0].ResourceID)
+	}
 }
 
-func TestWrapReadSeekerRecordsChunk(t *testing.T) {
-	m := newDiagnosticManager(Config{Enabled: true, QueueSize: 4}, testStore{})
+func TestBeginHTTPDisabledManagerNoops(t *testing.T) {
+	ctx, ref, err := BeginHTTP(context.Background(), NewManager(Config{Enabled: false}), nil, RequestOptions{
+		RequestID: "request_disabled",
+	})
+	if err != nil {
+		t.Fatalf("BeginHTTP returned error: %v", err)
+	}
+	if !ref.IsZero() {
+		t.Fatalf("ref = %+v, want zero", ref)
+	}
+	if _, ok := RequestRefFromContext(ctx); ok {
+		t.Fatal("disabled BeginHTTP stored request ref in context")
+	}
+}
+
+func TestWrapReadSeekerContextRecordsChunk(t *testing.T) {
+	m := newDiagnosticManager(Config{Enabled: true, ChunkLoggingEnabled: true, QueueSize: 4}, testStore{})
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -111,8 +147,11 @@ func TestWrapReadSeekerRecordsChunk(t *testing.T) {
 		}
 	}()
 
-	ref := RequestRef{SessionID: m.SessionID(), RequestID: "request_test"}
-	wrapped := WrapReadSeeker(m, ref, bytes.NewReader([]byte("hello")), ReadSeekerOptions{})
+	ctx, _, err := BeginHTTP(context.Background(), m, nil, RequestOptions{RequestID: "request_test"})
+	if err != nil {
+		t.Fatalf("BeginHTTP returned error: %v", err)
+	}
+	wrapped := WrapReadSeeker(ctx, bytes.NewReader([]byte("hello")), ReadSeekerOptions{})
 	buf := make([]byte, 2)
 	n, err := wrapped.Read(buf)
 	if err != nil {
@@ -133,6 +172,71 @@ func TestWrapReadSeekerRecordsChunk(t *testing.T) {
 	if stats.ChunkEventsRecorded != 1 {
 		t.Fatalf("recorded chunks = %d, want 1", stats.ChunkEventsRecorded)
 	}
+}
+
+func TestWrapReadSeekerReturnsOriginalWithoutActiveContext(t *testing.T) {
+	reader := bytes.NewReader([]byte("hello"))
+	wrapped := WrapReadSeeker(context.Background(), reader, ReadSeekerOptions{})
+	if wrapped != reader {
+		t.Fatal("WrapReadSeeker without diagnostic context did not return original reader")
+	}
+}
+
+func TestWrapReadSeekerReturnsOriginalWhenChunkLoggingDisabled(t *testing.T) {
+	m := newDiagnosticManager(Config{Enabled: true, ChunkLoggingEnabled: false}, testStore{})
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	defer func() {
+		if err := m.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown returned error: %v", err)
+		}
+	}()
+	ctx, _, err := BeginHTTP(context.Background(), m, nil, RequestOptions{RequestID: "request_test"})
+	if err != nil {
+		t.Fatalf("BeginHTTP returned error: %v", err)
+	}
+	reader := bytes.NewReader([]byte("hello"))
+	wrapped := WrapReadSeeker(ctx, reader, ReadSeekerOptions{})
+	if wrapped != reader {
+		t.Fatal("WrapReadSeeker with chunk logging disabled did not return original reader")
+	}
+}
+
+func TestEndHTTPFillsMissingTimeAndDuration(t *testing.T) {
+	st := &recordingStore{}
+	m := newDiagnosticManager(Config{Enabled: true}, st)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	defer func() {
+		if err := m.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown returned error: %v", err)
+		}
+	}()
+
+	ctx, _, err := BeginHTTP(context.Background(), m, nil, RequestOptions{RequestID: "request_test"})
+	if err != nil {
+		t.Fatalf("BeginHTTP returned error: %v", err)
+	}
+	time.Sleep(time.Millisecond)
+	EndHTTP(ctx, RequestEnd{ResponseStatus: http.StatusOK, TotalBytesSent: 5})
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.ends) != 1 {
+		t.Fatalf("stored ends = %d, want 1", len(st.ends))
+	}
+	if isZeroTimePoint(st.ends[0].Time) {
+		t.Fatal("EndHTTP did not fill Time")
+	}
+	if st.ends[0].DurationNs <= 0 {
+		t.Fatalf("EndHTTP duration = %d, want > 0", st.ends[0].DurationNs)
+	}
+}
+
+func TestEndHTTPWithoutDiagnosticContextNoops(t *testing.T) {
+	EndHTTP(context.Background(), RequestEnd{ResponseStatus: http.StatusOK})
 }
 
 func TestAPIStatsMarkersAndGlitches(t *testing.T) {
@@ -306,3 +410,24 @@ func (s testStore) GetTimeline(ctx context.Context, sessionID string) (timelineS
 }
 
 func (s testStore) Close(ctx context.Context) error { return nil }
+
+type recordingStore struct {
+	testStore
+	mu     sync.Mutex
+	starts []RequestStart
+	ends   []RequestEnd
+}
+
+func (s *recordingStore) BeginRequest(ctx context.Context, ref RequestRef, info RequestStart) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.starts = append(s.starts, info)
+	return nil
+}
+
+func (s *recordingStore) EndRequest(ctx context.Context, ref RequestRef, end RequestEnd) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ends = append(s.ends, end)
+	return nil
+}

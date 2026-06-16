@@ -21,6 +21,9 @@ Implement diagnostics in package `diagnose`.
 Current phase:
 
 - API-only diagnostics manager with `db_vc`-backed SQLite table definitions and storage.
+- Primary integration model is request `context.Context` plus `io.ReadSeeker` wrapping for `http.ServeContent`.
+- Use `diagnose.BeginHTTP(...)`, `diagnose.WrapReadSeeker(ctx, ...)`, and explicit `diagnose.EndHTTP(...)` in docs and examples.
+- Keep manual `BeginRequest`, `RecordChunk`, `EndRequest`, and `WrapReadSeekerForRequest` only as lower-level compatibility APIs.
 - Expose `diagnose.Tables` to the host database initialization path and call `diagnose.Init()` after `db_vc.Init(...)`.
 - Sessions, pacing profiles, requests, chunk events, window metrics, markers, and glitches are persisted through `db_vc.Table` helpers.
 - No frontend assets or HTML UI yet.

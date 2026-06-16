@@ -68,7 +68,7 @@ type windowMetric struct {
 	BytesSent          int64   `json:"bytes_sent"`
 	EffectiveMbps      float64 `json:"effective_mbps"`
 	WriteCount         int64   `json:"write_count"`
-	MaxWriteDurationNs int64   `json:"max_write_duration_ns"`
+	MaxReadDurationNs  int64   `json:"max_read_duration_ns"`
 	MaxFlushDurationNs int64   `json:"max_flush_duration_ns"`
 	MaxSleepActualNs   int64   `json:"max_sleep_actual_ns"`
 	MinAllowance       int     `json:"min_allowance"`

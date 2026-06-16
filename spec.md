@@ -108,6 +108,8 @@ type Manager interface {
 
 Codex should implement a real `Manager` behind this interface.
 
+The primary request integration should use context helpers and ReadSeeker wrapping. The explicit `BeginRequest`, `RecordChunk`, and `EndRequest` methods remain available as lower-level compatibility APIs.
+
 Important implementation rules:
 
 ```text
@@ -470,22 +472,40 @@ The main project may serve cached files by wrapping an `io.ReadSeeker` in a paci
 For that integration, diagnose should expose:
 
 ```go
+type RequestOptions struct {
+	RequestID      string
+	ResourceID     string
+	ResponseStatus int
+	ContentType    string
+	ContentLength  int64
+	PacingProfile  PacingProfile
+	ConnectionID   string
+}
+
 type ReadSeekerOptions struct {
 	StartingSeq int64
 }
 
-func WrapReadSeeker(m Manager, req RequestRef, r io.ReadSeeker, opts ReadSeekerOptions) io.ReadSeeker
+func BeginHTTP(ctx context.Context, m Manager, r *http.Request, opts RequestOptions) (context.Context, RequestRef, error)
+func RequestRefFromContext(ctx context.Context) (RequestRef, bool)
+func EndHTTP(ctx context.Context, end RequestEnd)
+
+func WrapReadSeeker(ctx context.Context, r io.ReadSeeker, opts ReadSeekerOptions) io.ReadSeeker
+func WrapReadSeekerForRequest(m Manager, req RequestRef, r io.ReadSeeker, opts ReadSeekerOptions) io.ReadSeeker
 ```
 
 Expected behavior:
 
 ```text
-Return the original reader when manager is nil, disabled, request ref is zero, or reader is nil.
+BeginHTTP builds RequestStart metadata from the HTTP request, stores RequestRef in context, and honors provided request/resource IDs.
+EndHTTP explicitly ends the request; missing time and duration are filled by the manager.
+WrapReadSeeker returns the original reader when context has no active diagnostic request, diagnostics are disabled, chunk logging is disabled, or reader is nil.
 Preserve io.ReadSeeker behavior for http.ServeContent.
 Record one ChunkEvent per successful Read.
 Record read timing and read byte counts.
 Use read bytes as WriteBytes proxy because ServeContent owns the socket write/flush loop.
 Leave write and flush timing fields zero because they are not observable from a ReadSeeker wrapper.
+WrapReadSeekerForRequest is a lower-level compatibility helper for callers that already manage RequestRef explicitly.
 ```
 
 ---

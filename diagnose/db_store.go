@@ -78,21 +78,21 @@ func initStoreSQL() {
 			response_status = ?, total_bytes_sent = ?, duration_ns = ?, error = ?
 			WHERE request_id = ?`,
 		insertChunk: `INSERT OR REPLACE INTO diagnose_chunk_events (
-			chunk_id, session_id, request_id, seq, time_before_write_ns, time_after_flush_ns,
+			chunk_id, session_id, request_id, seq, read_start_ns, read_end_ns,
 			read_bytes, write_bytes, cumulative_bytes, allowance_before, allowance_after,
 			sleep_requested_ns, sleep_actual_ns, read_duration_ns, write_duration_ns,
 			flush_duration_ns, error, event_json
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		upsertWindow: `INSERT INTO diagnose_window_metrics (
 			metric_id, session_id, request_id, window_ms, window_start_ns, window_end_ns,
-			bytes_sent, effective_mbps, write_count, max_write_duration_ns,
+			bytes_sent, effective_mbps, write_count, max_read_duration_ns,
 			max_flush_duration_ns, max_sleep_actual_ns, min_allowance, max_allowance
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(metric_id) DO UPDATE SET
 			bytes_sent = diagnose_window_metrics.bytes_sent + excluded.bytes_sent,
 			effective_mbps = ((diagnose_window_metrics.bytes_sent + excluded.bytes_sent) * 8.0 / diagnose_window_metrics.window_ms / 1000.0),
 			write_count = diagnose_window_metrics.write_count + excluded.write_count,
-			max_write_duration_ns = max(diagnose_window_metrics.max_write_duration_ns, excluded.max_write_duration_ns),
+			max_read_duration_ns = max(diagnose_window_metrics.max_read_duration_ns, excluded.max_read_duration_ns),
 			max_flush_duration_ns = max(diagnose_window_metrics.max_flush_duration_ns, excluded.max_flush_duration_ns),
 			max_sleep_actual_ns = max(diagnose_window_metrics.max_sleep_actual_ns, excluded.max_sleep_actual_ns),
 			min_allowance = min(diagnose_window_metrics.min_allowance, excluded.min_allowance),
@@ -134,7 +134,7 @@ func initStoreSQL() {
 		listChunks: `SELECT session_id, request_id, event_json
 			FROM diagnose_chunk_events WHERE request_id = ? ORDER BY seq ASC`,
 		listWindows: `SELECT session_id, request_id, window_ms, window_start_ns, window_end_ns,
-			bytes_sent, effective_mbps, write_count, max_write_duration_ns,
+			bytes_sent, effective_mbps, write_count, max_read_duration_ns,
 			max_flush_duration_ns, max_sleep_actual_ns, min_allowance, max_allowance
 			FROM diagnose_window_metrics WHERE request_id = ? AND window_ms = ?
 			ORDER BY window_start_ns ASC`,
@@ -231,7 +231,7 @@ func (s *dbVCStore) RecordChunk(ctx context.Context, ref RequestRef, ev ChunkEve
 		ref.RequestID,
 		ev.Seq,
 		chunkTimeNs(ev),
-		ev.TimeAfterFlush.ProcessUptimeNs,
+		ev.TimeAfterRead.ProcessUptimeNs,
 		ev.ReadBytes,
 		ev.WriteBytes,
 		ev.CumulativeBytes,
@@ -425,7 +425,7 @@ func (s *dbVCStore) ListWindows(ctx context.Context, requestID string, windowMS 
 			&w.BytesSent,
 			&w.EffectiveMbps,
 			&w.WriteCount,
-			&w.MaxWriteDurationNs,
+			&w.MaxReadDurationNs,
 			&w.MaxFlushDurationNs,
 			&w.MaxSleepActualNs,
 			&w.MinAllowance,
@@ -529,7 +529,7 @@ func (s *dbVCStore) recordWindows(ref RequestRef, ev ChunkEvent) error {
 			ev.WriteBytes,
 			effectiveMbps,
 			1,
-			ev.WriteDurationNs,
+			ev.ReadDurationNs,
 			ev.FlushDurationNs,
 			ev.SleepActualNs,
 			ev.AllowanceBefore,
@@ -601,11 +601,11 @@ func boolInt(v bool) int {
 
 func chunkTimeNs(ev ChunkEvent) int64 {
 	for _, candidate := range []int64{
+		ev.TimeBeforeRead.ProcessUptimeNs,
+		ev.TimeAfterRead.ProcessUptimeNs,
 		ev.TimeBeforeWrite.ProcessUptimeNs,
 		ev.TimeAfterWrite.ProcessUptimeNs,
 		ev.TimeAfterFlush.ProcessUptimeNs,
-		ev.TimeBeforeRead.ProcessUptimeNs,
-		ev.TimeAfterRead.ProcessUptimeNs,
 	} {
 		if candidate > 0 {
 			return candidate

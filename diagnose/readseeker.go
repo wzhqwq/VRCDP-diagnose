@@ -1,6 +1,7 @@
 package diagnose
 
 import (
+	"context"
 	"io"
 	"sync/atomic"
 )
@@ -12,24 +13,35 @@ type ReadSeekerOptions struct {
 	StartingSeq int64
 }
 
-// WrapReadSeeker records read-side chunk diagnostics for an io.ReadSeeker.
+// WrapReadSeeker records read-side chunk diagnostics for an io.ReadSeeker using
+// request metadata stored by BeginHTTP.
 //
 // This is intended for handlers that pass a cached file reader, optionally
 // wrapped in a pacing reader, to http.ServeContent. ServeContent owns the write
 // and flush loop, so this wrapper cannot observe actual socket write or flush
 // timings. It records read timing and uses read bytes as the write-byte proxy
 // for aggregate bandwidth windows.
-func WrapReadSeeker(m Manager, req RequestRef, r io.ReadSeeker, opts ReadSeekerOptions) io.ReadSeeker {
-	if r == nil || m == nil || !m.Enabled() || req.IsZero() {
+func WrapReadSeeker(ctx context.Context, r io.ReadSeeker, opts ReadSeekerOptions) io.ReadSeeker {
+	payload, ok := requestContextFromContext(ctx)
+	if r == nil || !ok || payload.manager == nil || payload.ref.IsZero() || !chunkLoggingEnabled(payload.manager) {
 		return r
 	}
-	return &diagnosticReadSeeker{
-		manager:    m,
-		req:        req,
-		r:          r,
-		nextSeq:    opts.StartingSeq,
-		cumulative: 0,
+	if opts.StartingSeq != 0 {
+		payload.nextSeq.CompareAndSwap(0, opts.StartingSeq)
 	}
+	return newDiagnosticReadSeeker(payload.manager, payload.ref, r, &payload.nextSeq, &payload.cumulative)
+}
+
+// WrapReadSeekerForRequest records read-side chunk diagnostics for callers that
+// still manage RequestRef explicitly.
+func WrapReadSeekerForRequest(m Manager, req RequestRef, r io.ReadSeeker, opts ReadSeekerOptions) io.ReadSeeker {
+	if r == nil || m == nil || !m.Enabled() || req.IsZero() || !chunkLoggingEnabled(m) {
+		return r
+	}
+	nextSeq := &atomic.Int64{}
+	nextSeq.Store(opts.StartingSeq)
+	cumulative := &atomic.Int64{}
+	return newDiagnosticReadSeeker(m, req, r, nextSeq, cumulative)
 }
 
 type diagnosticReadSeeker struct {
@@ -37,8 +49,24 @@ type diagnosticReadSeeker struct {
 	req     RequestRef
 	r       io.ReadSeeker
 
-	nextSeq    int64
-	cumulative int64
+	nextSeq    *atomic.Int64
+	cumulative *atomic.Int64
+}
+
+func newDiagnosticReadSeeker(
+	m Manager,
+	req RequestRef,
+	r io.ReadSeeker,
+	nextSeq *atomic.Int64,
+	cumulative *atomic.Int64,
+) io.ReadSeeker {
+	return &diagnosticReadSeeker{
+		manager:    m,
+		req:        req,
+		r:          r,
+		nextSeq:    nextSeq,
+		cumulative: cumulative,
+	}
 }
 
 func (r *diagnosticReadSeeker) Read(p []byte) (int, error) {
@@ -47,8 +75,8 @@ func (r *diagnosticReadSeeker) Read(p []byte) (int, error) {
 	after := r.manager.Now()
 
 	if n > 0 {
-		seq := atomic.AddInt64(&r.nextSeq, 1) - 1
-		cumulative := atomic.AddInt64(&r.cumulative, int64(n))
+		seq := r.nextSeq.Add(1) - 1
+		cumulative := r.cumulative.Add(int64(n))
 		r.manager.RecordChunk(r.req, ChunkEvent{
 			Seq:             seq,
 			TimeBeforeRead:  before,

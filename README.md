@@ -97,9 +97,9 @@ If mounted at `"/diagnostics"` with prefix stripping, the externally visible sta
 GET /diagnostics/api/stats
 ```
 
-## 4. Request Instrumentation
+## 4. Context-First Request Instrumentation
 
-At the beginning of a video request, build a `RequestStart` from the HTTP request and current pacing profile, then call `BeginRequest`.
+At the beginning of a video request, call `BeginHTTP`. It builds request metadata, honors the main project's request/resource IDs, and stores the diagnostic request reference in the returned context.
 
 ```go
 profile := diagnose.PacingProfile{
@@ -111,51 +111,40 @@ profile := diagnose.PacingProfile{
 	FlushPolicy:  "flush_each_chunk",
 }
 
-diag.RegisterPacingProfile(profile)
-
-start := diagnose.RequestStartFromHTTP(
-	diag,
-	r,
-	http.StatusOK,
-	"video/mp4",
-	contentLength,
-	profile,
-)
-start.RequestID = requestID
-start.ResourceID = resourceID
-
-reqRef, err := diag.BeginRequest(r.Context(), start)
+diagCtx, reqRef, err := diagnose.BeginHTTP(r.Context(), diag, r, diagnose.RequestOptions{
+	RequestID:      requestID,
+	ResourceID:     resourceID,
+	ResponseStatus: http.StatusOK,
+	ContentType:    "video/mp4",
+	ContentLength:  contentLength,
+	PacingProfile:  profile,
+})
 if err != nil {
 	// Decide whether diagnostics failure should be logged or ignored.
 	// Do not fail video serving solely because diagnostics failed.
 }
 ```
 
-When the request finishes, always call `EndRequest` if you have a non-zero `RequestRef`.
+When the request finishes, explicitly call `EndHTTP`. Missing time and duration are filled automatically.
 
 ```go
-defer func(started time.Time) {
-	if reqRef.IsZero() {
-		return
-	}
-	diag.EndRequest(reqRef, diagnose.RequestEnd{
-		Time:           diag.Now(),
+defer func() {
+	diagnose.EndHTTP(diagCtx, diagnose.RequestEnd{
 		ResponseStatus: status,
 		TotalBytesSent: totalBytesSent,
-		DurationNs:     time.Since(started).Nanoseconds(),
 		Error:          errText,
 	})
-}(time.Now())
+}()
 ```
 
 ## 5. ReadSeeker Instrumentation For ServeContent
 
-If the main project serves cached files by wrapping an `io.ReadSeeker` with `utils.PacingReader` and passing it to `http.ServeContent`, wrap the final reader with `diagnose.WrapReadSeeker`.
+If the main project serves cached files by wrapping an `io.ReadSeeker` with `utils.PacingReader` and passing it to `http.ServeContent`, wrap the final reader with `diagnose.WrapReadSeeker` using the context returned by `BeginHTTP`.
 
 ```go
 cached := openCachedReadSeeker(resourceID)
 paced := utils.NewPacingReader(cached, targetMbps)
-observed := diagnose.WrapReadSeeker(diag, reqRef, paced, diagnose.ReadSeekerOptions{})
+observed := diagnose.WrapReadSeeker(diagCtx, paced, diagnose.ReadSeekerOptions{})
 
 http.ServeContent(w, r, filename, modTime, observed)
 ```
@@ -163,6 +152,8 @@ http.ServeContent(w, r, filename, modTime, observed)
 `WrapReadSeeker` preserves `io.ReadSeeker`. It records read timing and read byte counts as chunk events. Because `http.ServeContent` owns the socket copy loop, this wrapper cannot observe actual response write or flush timings; for window metrics it uses read bytes as the transfer-byte proxy.
 
 If you already have a sequence offset for a resumed instrumentation stream, pass it through `ReadSeekerOptions.StartingSeq`.
+
+For lower-level integrations that already manage `RequestRef` manually, use `WrapReadSeekerForRequest`.
 
 ## 6. Manual Chunk Instrumentation
 

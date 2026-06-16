@@ -150,11 +150,11 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function getStats(): Promise<RuntimeStats> {
-  return fetchJSON<RuntimeStats>('/api/stats')
+  return fetchJSON<RuntimeStats>('api/stats')
 }
 
 export async function getSessions(): Promise<SessionSummary[]> {
-  const body = await fetchJSON<{ sessions: SessionSummary[] }>('/api/sessions')
+  const body = await fetchJSON<{ sessions: SessionSummary[] }>('api/sessions')
   return body.sessions ?? []
 }
 
@@ -164,16 +164,16 @@ export function getTimeline(sessionID: string, query: TimelineQuery = {}): Promi
   if (query.toNs !== undefined) params.set('to_ns', String(Math.max(0, Math.floor(query.toNs))))
   if (query.windowMs !== undefined) params.set('window_ms', String(Math.max(1, Math.floor(query.windowMs))))
   const suffix = params.size > 0 ? `?${params}` : ''
-  return fetchJSON<TimelineSummary>(`/api/sessions/${encodeURIComponent(sessionID)}/timeline${suffix}`)
+  return fetchJSON<TimelineSummary>(`api/sessions/${encodeURIComponent(sessionID)}/timeline${suffix}`)
 }
 
 export async function getRequests(sessionID: string): Promise<RequestSummary[]> {
-  const body = await fetchJSON<{ requests: RequestSummary[] }>(`/api/sessions/${encodeURIComponent(sessionID)}/requests`)
+  const body = await fetchJSON<{ requests: RequestSummary[] }>(`api/sessions/${encodeURIComponent(sessionID)}/requests`)
   return body.requests ?? []
 }
 
 export async function createMarker(marker: MarkerEvent): Promise<string> {
-  const body = await fetchJSON<{ marker_id: string }>('/api/markers', {
+  const body = await fetchJSON<{ marker_id: string }>('api/markers', {
     method: 'POST',
     body: JSON.stringify(marker),
   })
@@ -181,7 +181,7 @@ export async function createMarker(marker: MarkerEvent): Promise<string> {
 }
 
 export async function createGlitch(glitch: GlitchEvent): Promise<string> {
-  const body = await fetchJSON<{ glitch_id: string }>('/api/glitches', {
+  const body = await fetchJSON<{ glitch_id: string }>('api/glitches', {
     method: 'POST',
     body: JSON.stringify(glitch),
   })

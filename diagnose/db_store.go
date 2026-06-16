@@ -14,80 +14,45 @@ import (
 
 var ErrStoreNotInitialized = errors.New("diagnose database is not initialized; call db_vc.Init(db, dataVersion, diagnose.Tables...) before using an enabled diagnose.Manager")
 
-var storeSQL storeStatements
-
-type storeStatements struct {
-	ready bool
-
-	upsertSession       string
-	upsertPacingProfile string
-	insertRequest       string
-	endRequest          string
-	insertChunk         string
-	upsertWindow        string
-	insertMarker        string
-	insertGlitch        string
-	updateGlitch        string
-	deleteGlitch        string
-
-	listSessions string
-	getSession   string
-	listRequests string
-	getRequest   string
-	listChunks   string
-	listWindows  string
-	listMarkers  string
-	listGlitches string
+var sessionColumns = []string{"session_id", "session_label", "start_wall_time", "start_unix_nano", "storage_version", "config_json"}
+var pacingProfileColumns = []string{
+	"profile_id", "session_id", "name", "target_mbps", "tick_ns", "bytes_per_tick",
+	"allow_burst", "max_accumulated_allowance", "force_content_length", "disable_http2",
+	"flush_policy", "notes",
+}
+var requestColumns = []string{
+	"request_id", "session_id", "resource_id", "start_process_uptime_ns", "end_process_uptime_ns",
+	"start_json", "end_json", "incomplete", "response_status", "total_bytes_sent",
+	"duration_ns", "error",
+}
+var requestSummaryColumns = []string{"request_id", "session_id", "start_json", "end_json", "incomplete"}
+var chunkEventColumns = []string{
+	"chunk_id", "session_id", "request_id", "seq", "read_start_ns", "read_end_ns",
+	"read_bytes", "write_bytes", "cumulative_bytes", "allowance_before", "allowance_after",
+	"sleep_requested_ns", "sleep_actual_ns", "read_duration_ns", "write_duration_ns",
+	"flush_duration_ns", "error", "event_json",
+}
+var windowMetricColumns = []string{
+	"metric_id", "session_id", "request_id", "window_ms", "window_start_ns", "window_end_ns",
+	"bytes_sent", "effective_mbps", "write_count", "max_read_duration_ns",
+	"max_flush_duration_ns", "max_sleep_actual_ns", "min_allowance", "max_allowance",
+}
+var markerColumns = []string{"marker_id", "session_id", "process_uptime_ns", "wall_time", "label", "note", "source", "event_json"}
+var glitchColumns = []string{
+	"glitch_id", "session_id", "process_uptime_ns", "wall_time", "recording_filename",
+	"recording_frame_index", "recording_time_sec", "duration_frames", "duration_ms",
+	"severity", "corruption_type", "notes", "source", "event_json",
 }
 
-type dbVCStore struct {
-	cfg         Config
-	windowSizes []int
-}
-
-func newDBVCStore(cfg Config) store {
-	initStoreSQL()
-	return &dbVCStore{
-		cfg:         cfg,
-		windowSizes: windowSizesFromConfig(cfg),
-	}
-}
-
-func initStoreSQL() {
-	if storeSQL.ready {
-		return
-	}
-	storeSQL = storeStatements{
-		ready: true,
-
-		upsertSession: `INSERT OR REPLACE INTO diagnose_sessions (
-			session_id, session_label, start_wall_time, start_unix_nano, storage_version, config_json
-		) VALUES (?, ?, ?, ?, ?, ?)`,
-		upsertPacingProfile: `INSERT OR REPLACE INTO diagnose_pacing_profiles (
-			profile_id, session_id, name, target_mbps, tick_ns, bytes_per_tick,
-			allow_burst, max_accumulated_allowance, force_content_length, disable_http2,
-			flush_policy, notes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		insertRequest: `INSERT OR REPLACE INTO diagnose_requests (
-			request_id, session_id, resource_id, start_process_uptime_ns, end_process_uptime_ns,
-			start_json, end_json, incomplete, response_status, total_bytes_sent,
-			duration_ns, error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		endRequest: `UPDATE diagnose_requests SET
-			end_process_uptime_ns = ?, end_json = ?, incomplete = ?,
-			response_status = ?, total_bytes_sent = ?, duration_ns = ?, error = ?
-			WHERE request_id = ?`,
-		insertChunk: `INSERT OR REPLACE INTO diagnose_chunk_events (
-			chunk_id, session_id, request_id, seq, read_start_ns, read_end_ns,
-			read_bytes, write_bytes, cumulative_bytes, allowance_before, allowance_after,
-			sleep_requested_ns, sleep_actual_ns, read_duration_ns, write_duration_ns,
-			flush_duration_ns, error, event_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		upsertWindow: `INSERT INTO diagnose_window_metrics (
-			metric_id, session_id, request_id, window_ms, window_start_ns, window_end_ns,
-			bytes_sent, effective_mbps, write_count, max_read_duration_ns,
-			max_flush_duration_ns, max_sleep_actual_ns, min_allowance, max_allowance
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+var upsertSession = sessionsTable.InsertOrReplace(sessionColumns...).Build()
+var upsertPacingProfile = pacingProfilesTable.InsertOrReplace(pacingProfileColumns...).Build()
+var insertRequest = requestsTable.InsertOrReplace(requestColumns...).Build()
+var endRequest = requestsTable.Update().Set(
+	"end_process_uptime_ns = ?", "end_json = ?", "incomplete = ?",
+	"response_status = ?", "total_bytes_sent = ?", "duration_ns = ?", "error = ?",
+).Where("request_id = ?").Build()
+var insertChunk = chunkEventsTable.InsertOrReplace(chunkEventColumns...).Build()
+var upsertWindow = windowMetricsTable.Insert(windowMetricColumns...).Build() + `
 		ON CONFLICT(metric_id) DO UPDATE SET
 			bytes_sent = diagnose_window_metrics.bytes_sent + excluded.bytes_sent,
 			effective_mbps = ((diagnose_window_metrics.bytes_sent + excluded.bytes_sent) * 8.0 / diagnose_window_metrics.window_ms / 1000.0),
@@ -96,52 +61,51 @@ func initStoreSQL() {
 			max_flush_duration_ns = max(diagnose_window_metrics.max_flush_duration_ns, excluded.max_flush_duration_ns),
 			max_sleep_actual_ns = max(diagnose_window_metrics.max_sleep_actual_ns, excluded.max_sleep_actual_ns),
 			min_allowance = min(diagnose_window_metrics.min_allowance, excluded.min_allowance),
-			max_allowance = max(diagnose_window_metrics.max_allowance, excluded.max_allowance)`,
-		insertMarker: `INSERT OR REPLACE INTO diagnose_markers (
-			marker_id, session_id, process_uptime_ns, wall_time, label, note, source, event_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		insertGlitch: `INSERT OR REPLACE INTO diagnose_glitches (
-			glitch_id, session_id, process_uptime_ns, wall_time, recording_filename,
-			recording_frame_index, recording_time_sec, duration_frames, duration_ms,
-			severity, corruption_type, notes, source, event_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		updateGlitch: `UPDATE diagnose_glitches SET
-			session_id = ?, process_uptime_ns = ?, wall_time = ?, recording_filename = ?,
-			recording_frame_index = ?, recording_time_sec = ?, duration_frames = ?,
-			duration_ms = ?, severity = ?, corruption_type = ?, notes = ?, source = ?,
-			event_json = ?
-			WHERE glitch_id = ?`,
-		deleteGlitch: `DELETE FROM diagnose_glitches WHERE glitch_id = ?`,
+			max_allowance = max(diagnose_window_metrics.max_allowance, excluded.max_allowance)`
+var insertMarker = markersTable.InsertOrReplace(markerColumns...).Build()
+var insertGlitch = glitchesTable.InsertOrReplace(glitchColumns...).Build()
+var updateGlitch = glitchesTable.Update().Set(
+	"session_id = ?", "process_uptime_ns = ?", "wall_time = ?", "recording_filename = ?",
+	"recording_frame_index = ?", "recording_time_sec = ?", "duration_frames = ?",
+	"duration_ms = ?", "severity = ?", "corruption_type = ?", "notes = ?", "source = ?",
+	"event_json = ?",
+).Where("glitch_id = ?").Build()
+var deleteGlitch = glitchesTable.Delete().Where("glitch_id = ?").Build()
 
-		listSessions: `SELECT
-			s.session_id, s.session_label, s.start_wall_time, s.start_unix_nano,
-			(SELECT COUNT(*) FROM diagnose_requests r WHERE r.session_id = s.session_id),
-			(SELECT COUNT(*) FROM diagnose_markers m WHERE m.session_id = s.session_id),
-			(SELECT COUNT(*) FROM diagnose_glitches g WHERE g.session_id = s.session_id),
-			(SELECT COUNT(*) FROM diagnose_chunk_events c WHERE c.session_id = s.session_id)
-			FROM diagnose_sessions s ORDER BY s.start_unix_nano DESC`,
-		getSession: `SELECT
-			s.session_id, s.session_label, s.start_wall_time, s.start_unix_nano,
-			(SELECT COUNT(*) FROM diagnose_requests r WHERE r.session_id = s.session_id),
-			(SELECT COUNT(*) FROM diagnose_markers m WHERE m.session_id = s.session_id),
-			(SELECT COUNT(*) FROM diagnose_glitches g WHERE g.session_id = s.session_id),
-			(SELECT COUNT(*) FROM diagnose_chunk_events c WHERE c.session_id = s.session_id)
-			FROM diagnose_sessions s WHERE s.session_id = ?`,
-		listRequests: `SELECT request_id, session_id, start_json, end_json, incomplete
-			FROM diagnose_requests WHERE session_id = ? ORDER BY start_process_uptime_ns ASC`,
-		getRequest: `SELECT request_id, session_id, start_json, end_json, incomplete
-			FROM diagnose_requests WHERE request_id = ?`,
-		listChunks: `SELECT session_id, request_id, event_json
-			FROM diagnose_chunk_events WHERE request_id = ? ORDER BY seq ASC`,
-		listWindows: `SELECT session_id, request_id, window_ms, window_start_ns, window_end_ns,
-			bytes_sent, effective_mbps, write_count, max_read_duration_ns,
-			max_flush_duration_ns, max_sleep_actual_ns, min_allowance, max_allowance
-			FROM diagnose_window_metrics WHERE request_id = ? AND window_ms = ?
-			ORDER BY window_start_ns ASC`,
-		listMarkers: `SELECT marker_id, event_json FROM diagnose_markers
-			WHERE session_id = ? ORDER BY process_uptime_ns ASC`,
-		listGlitches: `SELECT glitch_id, event_json FROM diagnose_glitches
-			WHERE session_id = ? ORDER BY process_uptime_ns ASC`,
+var listSessions = `SELECT
+	s.session_id, s.session_label, s.start_wall_time, s.start_unix_nano,
+	(SELECT COUNT(*) FROM diagnose_requests r WHERE r.session_id = s.session_id),
+	(SELECT COUNT(*) FROM diagnose_markers m WHERE m.session_id = s.session_id),
+	(SELECT COUNT(*) FROM diagnose_glitches g WHERE g.session_id = s.session_id),
+	(SELECT COUNT(*) FROM diagnose_chunk_events c WHERE c.session_id = s.session_id)
+	FROM diagnose_sessions s ORDER BY s.start_unix_nano DESC`
+var getSession = `SELECT
+	s.session_id, s.session_label, s.start_wall_time, s.start_unix_nano,
+	(SELECT COUNT(*) FROM diagnose_requests r WHERE r.session_id = s.session_id),
+	(SELECT COUNT(*) FROM diagnose_markers m WHERE m.session_id = s.session_id),
+	(SELECT COUNT(*) FROM diagnose_glitches g WHERE g.session_id = s.session_id),
+	(SELECT COUNT(*) FROM diagnose_chunk_events c WHERE c.session_id = s.session_id)
+	FROM diagnose_sessions s WHERE s.session_id = ?`
+var listRequests = requestsTable.Select(requestSummaryColumns...).Where("session_id = ?").Sort("start_process_uptime_ns", true).Build()
+var getRequest = requestsTable.Select(requestSummaryColumns...).Where("request_id = ?").Build()
+var listChunks = chunkEventsTable.Select("session_id", "request_id", "event_json").Where("request_id = ?").Sort("seq", true).Build()
+var listWindows = windowMetricsTable.Select(
+	"session_id", "request_id", "window_ms", "window_start_ns", "window_end_ns",
+	"bytes_sent", "effective_mbps", "write_count", "max_read_duration_ns",
+	"max_flush_duration_ns", "max_sleep_actual_ns", "min_allowance", "max_allowance",
+).Where("request_id = ? AND window_ms = ?").Sort("window_start_ns", true).Build()
+var listMarkers = markersTable.Select("marker_id", "event_json").Where("session_id = ?").Sort("process_uptime_ns", true).Build()
+var listGlitches = glitchesTable.Select("glitch_id", "event_json").Where("session_id = ?").Sort("process_uptime_ns", true).Build()
+
+type dbVCStore struct {
+	cfg         Config
+	windowSizes []int
+}
+
+func newDBVCStore(cfg Config) store {
+	return &dbVCStore{
+		cfg:         cfg,
+		windowSizes: windowSizesFromConfig(cfg),
 	}
 }
 
@@ -150,7 +114,7 @@ func (s *dbVCStore) StartSession(ctx context.Context, session sessionInfo) error
 	if err != nil {
 		return err
 	}
-	_, err = safeExec(sessionsTable, storeSQL.upsertSession,
+	_, err = safeExec(sessionsTable, upsertSession,
 		session.SessionID,
 		session.SessionLabel,
 		session.StartWallTime,
@@ -162,7 +126,7 @@ func (s *dbVCStore) StartSession(ctx context.Context, session sessionInfo) error
 }
 
 func (s *dbVCStore) RegisterPacingProfile(ctx context.Context, sessionID string, profile PacingProfile) error {
-	_, err := safeExec(pacingProfilesTable, storeSQL.upsertPacingProfile,
+	_, err := safeExec(pacingProfilesTable, upsertPacingProfile,
 		sessionID+":"+profile.Name,
 		sessionID,
 		profile.Name,
@@ -184,7 +148,7 @@ func (s *dbVCStore) BeginRequest(ctx context.Context, ref RequestRef, info Reque
 	if err != nil {
 		return err
 	}
-	_, err = safeExec(requestsTable, storeSQL.insertRequest,
+	_, err = safeExec(requestsTable, insertRequest,
 		ref.RequestID,
 		ref.SessionID,
 		info.ResourceID,
@@ -206,7 +170,7 @@ func (s *dbVCStore) EndRequest(ctx context.Context, ref RequestRef, end RequestE
 	if err != nil {
 		return err
 	}
-	_, err = safeExec(requestsTable, storeSQL.endRequest,
+	_, err = safeExec(requestsTable, endRequest,
 		end.Time.ProcessUptimeNs,
 		endJSON,
 		0,
@@ -225,7 +189,7 @@ func (s *dbVCStore) RecordChunk(ctx context.Context, ref RequestRef, ev ChunkEve
 		return err
 	}
 	chunkID := fmt.Sprintf("%s:%s:%d", ref.SessionID, ref.RequestID, ev.Seq)
-	_, err = safeExec(chunkEventsTable, storeSQL.insertChunk,
+	_, err = safeExec(chunkEventsTable, insertChunk,
 		chunkID,
 		ref.SessionID,
 		ref.RequestID,
@@ -259,7 +223,7 @@ func (s *dbVCStore) RecordMarker(ctx context.Context, sessionID, markerID string
 	if err != nil {
 		return err
 	}
-	_, err = safeExec(markersTable, storeSQL.insertMarker,
+	_, err = safeExec(markersTable, insertMarker,
 		markerID,
 		sessionID,
 		marker.Time.ProcessUptimeNs,
@@ -277,7 +241,7 @@ func (s *dbVCStore) RecordGlitch(ctx context.Context, sessionID, glitchID string
 	if err != nil {
 		return err
 	}
-	_, err = safeExec(glitchesTable, storeSQL.insertGlitch,
+	_, err = safeExec(glitchesTable, insertGlitch,
 		glitchID,
 		sessionID,
 		glitch.Time.ProcessUptimeNs,
@@ -301,7 +265,7 @@ func (s *dbVCStore) UpdateGlitch(ctx context.Context, sessionID, glitchID string
 	if err != nil {
 		return err
 	}
-	_, err = safeExec(glitchesTable, storeSQL.updateGlitch,
+	_, err = safeExec(glitchesTable, updateGlitch,
 		sessionID,
 		glitch.Time.ProcessUptimeNs,
 		glitch.Time.WallRFC3339Nano,
@@ -321,12 +285,12 @@ func (s *dbVCStore) UpdateGlitch(ctx context.Context, sessionID, glitchID string
 }
 
 func (s *dbVCStore) DeleteGlitch(ctx context.Context, glitchID string) error {
-	_, err := safeExec(glitchesTable, storeSQL.deleteGlitch, glitchID)
+	_, err := safeExec(glitchesTable, deleteGlitch, glitchID)
 	return normalizeStoreErr(err)
 }
 
 func (s *dbVCStore) ListSessions(ctx context.Context) ([]sessionSummary, error) {
-	rows, err := safeQuery(sessionsTable, storeSQL.listSessions)
+	rows, err := safeQuery(sessionsTable, listSessions)
 	if err != nil {
 		return nil, normalizeStoreErr(err)
 	}
@@ -344,7 +308,7 @@ func (s *dbVCStore) ListSessions(ctx context.Context) ([]sessionSummary, error) 
 }
 
 func (s *dbVCStore) GetSession(ctx context.Context, sessionID string) (sessionSummary, bool, error) {
-	rows, err := safeQuery(sessionsTable, storeSQL.getSession, sessionID)
+	rows, err := safeQuery(sessionsTable, getSession, sessionID)
 	if err != nil {
 		return sessionSummary{}, false, normalizeStoreErr(err)
 	}
@@ -360,7 +324,7 @@ func (s *dbVCStore) GetSession(ctx context.Context, sessionID string) (sessionSu
 }
 
 func (s *dbVCStore) ListRequests(ctx context.Context, sessionID string) ([]requestSummary, error) {
-	rows, err := safeQuery(requestsTable, storeSQL.listRequests, sessionID)
+	rows, err := safeQuery(requestsTable, listRequests, sessionID)
 	if err != nil {
 		return nil, normalizeStoreErr(err)
 	}
@@ -369,7 +333,7 @@ func (s *dbVCStore) ListRequests(ctx context.Context, sessionID string) ([]reque
 }
 
 func (s *dbVCStore) GetRequest(ctx context.Context, requestID string) (requestSummary, bool, error) {
-	rows, err := safeQuery(requestsTable, storeSQL.getRequest, requestID)
+	rows, err := safeQuery(requestsTable, getRequest, requestID)
 	if err != nil {
 		return requestSummary{}, false, normalizeStoreErr(err)
 	}
@@ -385,7 +349,7 @@ func (s *dbVCStore) GetRequest(ctx context.Context, requestID string) (requestSu
 }
 
 func (s *dbVCStore) ListChunks(ctx context.Context, requestID string) ([]chunkSummary, error) {
-	rows, err := safeQuery(chunkEventsTable, storeSQL.listChunks, requestID)
+	rows, err := safeQuery(chunkEventsTable, listChunks, requestID)
 	if err != nil {
 		return nil, normalizeStoreErr(err)
 	}
@@ -407,7 +371,7 @@ func (s *dbVCStore) ListChunks(ctx context.Context, requestID string) ([]chunkSu
 }
 
 func (s *dbVCStore) ListWindows(ctx context.Context, requestID string, windowMS int) ([]windowMetric, error) {
-	rows, err := safeQuery(windowMetricsTable, storeSQL.listWindows, requestID, windowMS)
+	rows, err := safeQuery(windowMetricsTable, listWindows, requestID, windowMS)
 	if err != nil {
 		return nil, normalizeStoreErr(err)
 	}
@@ -439,7 +403,7 @@ func (s *dbVCStore) ListWindows(ctx context.Context, requestID string, windowMS 
 }
 
 func (s *dbVCStore) ListMarkers(ctx context.Context, sessionID string) ([]markerSummary, error) {
-	rows, err := safeQuery(markersTable, storeSQL.listMarkers, sessionID)
+	rows, err := safeQuery(markersTable, listMarkers, sessionID)
 	if err != nil {
 		return nil, normalizeStoreErr(err)
 	}
@@ -461,7 +425,7 @@ func (s *dbVCStore) ListMarkers(ctx context.Context, sessionID string) ([]marker
 }
 
 func (s *dbVCStore) ListGlitches(ctx context.Context, sessionID string) ([]glitchSummary, error) {
-	rows, err := safeQuery(glitchesTable, storeSQL.listGlitches, sessionID)
+	rows, err := safeQuery(glitchesTable, listGlitches, sessionID)
 	if err != nil {
 		return nil, normalizeStoreErr(err)
 	}
@@ -519,7 +483,7 @@ func (s *dbVCStore) recordWindows(ref RequestRef, ev ChunkEvent) error {
 		windowEnd := windowStart + windowNs
 		metricID := fmt.Sprintf("%s:%s:%d:%d", ref.SessionID, ref.RequestID, windowMS, windowStart)
 		effectiveMbps := float64(ev.WriteBytes*8) / float64(windowMS) / 1000.0
-		if _, err := safeExec(windowMetricsTable, storeSQL.upsertWindow,
+		if _, err := safeExec(windowMetricsTable, upsertWindow,
 			metricID,
 			ref.SessionID,
 			ref.RequestID,

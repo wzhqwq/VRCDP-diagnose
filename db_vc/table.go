@@ -173,6 +173,12 @@ func (t *Table) Insert(columns ...string) *QuickInsert {
 	return newInsert(t, columns)
 }
 
+func (t *Table) InsertOrReplace(columns ...string) *QuickInsert {
+	i := newInsert(t, columns)
+	i.prefix = strings.Replace(i.prefix, "INSERT", "INSERT OR REPLACE", 1)
+	return i
+}
+
 func (t *Table) Update() *QuickUpdate {
 	return newUpdate(t)
 }

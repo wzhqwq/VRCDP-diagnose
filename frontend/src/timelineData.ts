@@ -35,6 +35,13 @@ export interface RangeSummary {
   droppedChunks: boolean
 }
 
+export interface RecordingSegment {
+  timelineStartNs: number
+  timelineEndNs: number
+  videoStartSec: number
+  videoEndSec: number
+}
+
 export const NS_PER_MS = 1_000_000
 export const NS_PER_SEC = 1_000_000_000
 
@@ -134,6 +141,123 @@ export function glitchesInRange(glitches: GlitchSummary[], range: RangeNs): Glit
     const ns = glitch.glitch.time?.process_uptime_ns ?? 0
     return ns >= range.from && ns <= range.to
   })
+}
+
+export function markerTimeNs(marker: MarkerSummary): number {
+  return marker.marker.time?.process_uptime_ns ?? 0
+}
+
+export function obsRecordingStartMarkers(timeline: TimelineSummary | null): MarkerSummary[] {
+  return (timeline?.markers ?? [])
+    .filter((marker) => marker.marker.label === 'obs_recording_started' && markerTimeNs(marker) > 0)
+    .sort((a, b) => markerTimeNs(a) - markerTimeNs(b))
+}
+
+export function buildRecordingSegments(
+  timeline: TimelineSummary | null,
+  startMarkerID: string,
+  videoDurationSec: number,
+): RecordingSegment[] {
+  if (!timeline || !startMarkerID) return []
+  const startMarker = timeline.markers.find((marker) => marker.marker_id === startMarkerID)
+  const startNs = startMarker ? markerTimeNs(startMarker) : 0
+  if (startNs <= 0) return []
+
+  const events = timeline.markers
+    .filter((marker) => {
+      const ns = markerTimeNs(marker)
+      return ns >= startNs && marker.marker.source === 'obs-websocket'
+    })
+    .sort((a, b) => markerTimeNs(a) - markerTimeNs(b))
+
+  const segments: RecordingSegment[] = []
+  let recording = false
+  let segmentStartNs = startNs
+  let videoStartSec = 0
+  const maxVideoSec = Number.isFinite(videoDurationSec) && videoDurationSec > 0 ? videoDurationSec : Number.POSITIVE_INFINITY
+
+  for (const marker of events) {
+    const ns = markerTimeNs(marker)
+    switch (marker.marker.label) {
+      case 'obs_recording_started':
+        if (ns === startNs) {
+          recording = true
+          segmentStartNs = ns
+        } else if (recording && ns > segmentStartNs) {
+          const durationSec = Math.min((ns - segmentStartNs) / NS_PER_SEC, maxVideoSec - videoStartSec)
+          if (durationSec > 0) {
+            segments.push({
+              timelineStartNs: segmentStartNs,
+              timelineEndNs: segmentStartNs + durationSec * NS_PER_SEC,
+              videoStartSec,
+              videoEndSec: videoStartSec + durationSec,
+            })
+            videoStartSec += durationSec
+          }
+          break
+        }
+        break
+      case 'obs_recording_paused':
+      case 'obs_recording_stopped':
+        if (recording && ns > segmentStartNs) {
+          const durationSec = Math.min((ns - segmentStartNs) / NS_PER_SEC, maxVideoSec - videoStartSec)
+          if (durationSec > 0) {
+            segments.push({
+              timelineStartNs: segmentStartNs,
+              timelineEndNs: segmentStartNs + durationSec * NS_PER_SEC,
+              videoStartSec,
+              videoEndSec: videoStartSec + durationSec,
+            })
+            videoStartSec += durationSec
+          }
+        }
+        recording = false
+        if (marker.marker.label === 'obs_recording_stopped') return segments
+        break
+      case 'obs_recording_resumed':
+        if (!recording) {
+          recording = true
+          segmentStartNs = ns
+        }
+        break
+    }
+    if (videoStartSec >= maxVideoSec) return segments
+  }
+
+  if (recording && videoStartSec < maxVideoSec) {
+    const domain = timelineDomain(timeline)
+    const fallbackEndNs =
+      Number.isFinite(maxVideoSec) && maxVideoSec > videoStartSec
+        ? segmentStartNs + (maxVideoSec - videoStartSec) * NS_PER_SEC
+        : Math.max(segmentStartNs, domain.to)
+    if (fallbackEndNs > segmentStartNs) {
+      const durationSec = Math.min((fallbackEndNs - segmentStartNs) / NS_PER_SEC, maxVideoSec - videoStartSec)
+      if (durationSec > 0) {
+        segments.push({
+          timelineStartNs: segmentStartNs,
+          timelineEndNs: segmentStartNs + durationSec * NS_PER_SEC,
+          videoStartSec,
+          videoEndSec: videoStartSec + durationSec,
+        })
+      }
+    }
+  }
+
+  return segments
+}
+
+export function timelineNsFromVideoTime(segments: RecordingSegment[], currentTimeSec: number): number | null {
+  if (segments.length === 0 || !Number.isFinite(currentTimeSec)) return null
+  for (const segment of segments) {
+    if (currentTimeSec >= segment.videoStartSec && currentTimeSec <= segment.videoEndSec) {
+      return segment.timelineStartNs + (currentTimeSec - segment.videoStartSec) * NS_PER_SEC
+    }
+  }
+  const first = segments[0]
+  const last = segments[segments.length - 1]
+  if (currentTimeSec < first.videoStartSec) return first.timelineStartNs
+  if (currentTimeSec > last.videoEndSec) return last.timelineEndNs
+  return null
 }
 
 export function summarizeRange(timeline: TimelineSummary | null, range: RangeNs | null, droppedChunks: boolean): RangeSummary {

@@ -17,11 +17,14 @@
     formatBytes,
     formatDuration,
     formatProcessTime,
+    buildRecordingSegments,
+    obsRecordingStartMarkers,
     requestDurationMs,
     requestEndNs,
     requestStartNs,
     resourceKey,
     summarizeRange,
+    timelineNsFromVideoTime,
     timelineDomain,
     type RangeNs,
   } from './timelineData'
@@ -51,6 +54,12 @@
   let timelineLoading = $state(false)
   let actionMessage = $state('')
   let errorMessage = $state('')
+  let videoURL = $state('')
+  let videoCurrentTime = $state(0)
+  let videoDuration = $state(0)
+  let videoPaused = $state(true)
+  let boundRecordingStartMarkerID = $state('')
+  let cursorMarkerLabel = $state('note')
 
   let glitchSeverity = $state('')
   let glitchType = $state('')
@@ -79,6 +88,12 @@
   const rangeSummary = $derived(summarizeRange(detailTimeline, selectedRange, (selectedSession?.chunk_events_dropped ?? 0) > 0))
   const totalBytesServed = $derived(requests.reduce((total, request) => total + (request.end?.total_bytes_sent ?? 0), 0))
   const maxTimelineMbps = $derived(Math.max(0, ...(timeline?.windows ?? []).map((window) => window.effective_mbps)))
+  const recordingStartMarkers = $derived(obsRecordingStartMarkers(timeline))
+  const boundRecordingStartMarker = $derived(
+    recordingStartMarkers.find((marker) => marker.marker_id === boundRecordingStartMarkerID) ?? null,
+  )
+  const recordingSegments = $derived(buildRecordingSegments(timeline, boundRecordingStartMarkerID, videoDuration))
+  const playbackCursorNs = $derived(timelineNsFromVideoTime(recordingSegments, videoCurrentTime))
 
   onMount(() => {
     void refreshShell(true)
@@ -86,7 +101,10 @@
       void refreshShell(false)
       if (selectedSessionId) void loadTimeline(selectedSessionId, selectedRange)
     }, 5000)
-    return () => window.clearInterval(interval)
+    return () => {
+      window.clearInterval(interval)
+      revokeVideoURL()
+    }
   })
 
   async function refreshShell(loadDefaultTimeline: boolean) {
@@ -139,6 +157,7 @@
     selectedRange = null
     zoomTimeline = null
     selectedRequestId = null
+    boundRecordingStartMarkerID = ''
     void loadTimeline(sessionID, null)
   }
 
@@ -151,14 +170,30 @@
     }
   }
 
-  async function addMarker(label: string) {
+  async function addMarker(label: string, processUptimeNs?: number) {
     try {
-      await createMarker({ label, source: 'frontend' })
+      await createMarker({
+        label,
+        source: 'frontend',
+        time:
+          processUptimeNs === undefined
+            ? undefined
+            : {
+                process_uptime_ns: Math.round(processUptimeNs),
+                wall_unix_nano: 0,
+                wall_rfc3339_nano: '',
+              },
+      })
       actionMessage = `Marker recorded: ${label}`
       if (selectedSessionId) await loadTimeline(selectedSessionId, selectedRange)
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'Unable to create marker'
     }
+  }
+
+  async function addCursorMarker() {
+    if (playbackCursorNs === null) return
+    await addMarker(cursorMarkerLabel || 'note', playbackCursorNs)
   }
 
   async function submitGlitch(event: SubmitEvent) {
@@ -210,6 +245,23 @@
   function refreshAll() {
     void refreshShell(false)
     if (selectedSessionId) void loadTimeline(selectedSessionId, selectedRange)
+  }
+
+  function handleVideoFileChange(event: Event) {
+    const input = event.currentTarget as HTMLInputElement
+    const file = input.files?.[0]
+    revokeVideoURL()
+    videoCurrentTime = 0
+    videoDuration = 0
+    videoPaused = true
+    if (!file) return
+    videoURL = URL.createObjectURL(file)
+  }
+
+  function revokeVideoURL() {
+    if (!videoURL) return
+    URL.revokeObjectURL(videoURL)
+    videoURL = ''
   }
 </script>
 
@@ -318,6 +370,7 @@
           {timeline}
           {selectedRange}
           selectedRequestId={selectedRequestId}
+          playbackCursorNs={playbackCursorNs}
           onRangeChange={handleRangeChange}
           onSelectRequest={selectRequest}
         />
@@ -384,6 +437,72 @@
         </article>
 
         <aside class="detail-stack">
+          <article class="compact-panel video-panel">
+            <div class="panel-title-row compact-title-row">
+              <div>
+                <h3>OBS video</h3>
+                <p>{playbackCursorNs === null ? 'No cursor' : formatProcessTime(playbackCursorNs)}</p>
+              </div>
+              <span class="status-pill">{videoPaused ? 'Paused' : 'Playing'}</span>
+            </div>
+
+            <label>
+              <span>Video file</span>
+              <input accept="video/*" type="file" onchange={handleVideoFileChange} />
+            </label>
+
+            <label>
+              <span>Bound start</span>
+              <select bind:value={boundRecordingStartMarkerID} disabled={recordingStartMarkers.length === 0}>
+                <option value="">unbound</option>
+                {#each recordingStartMarkers as marker (marker.marker_id)}
+                  <option value={marker.marker_id}>
+                    {formatProcessTime(marker.marker.time?.process_uptime_ns ?? 0)}
+                    {marker.marker.note ? ` ${marker.marker.note}` : ''}
+                  </option>
+                {/each}
+              </select>
+            </label>
+
+            {#if videoURL}
+              <video
+                class="obs-video"
+                controls
+                src={videoURL}
+                bind:currentTime={videoCurrentTime}
+                bind:duration={videoDuration}
+                bind:paused={videoPaused}
+              >
+                <track kind="captions" />
+              </video>
+            {:else}
+              <div class="video-empty">No video loaded</div>
+            {/if}
+
+            <dl class="video-facts">
+              <div>
+                <dt>Video</dt>
+                <dd>{videoCurrentTime.toFixed(3)}s / {Number.isFinite(videoDuration) ? videoDuration.toFixed(3) : 'n/a'}s</dd>
+              </div>
+              <div>
+                <dt>Start</dt>
+                <dd>{boundRecordingStartMarker ? formatProcessTime(boundRecordingStartMarker.marker.time?.process_uptime_ns ?? 0) : 'unbound'}</dd>
+              </div>
+              <div>
+                <dt>Segments</dt>
+                <dd>{recordingSegments.length}</dd>
+              </div>
+            </dl>
+
+            <div class="cursor-marker-row">
+              <label>
+                <span>Cursor label</span>
+                <input bind:value={cursorMarkerLabel} placeholder="label" />
+              </label>
+              <button type="button" onclick={addCursorMarker} disabled={playbackCursorNs === null}>Add label</button>
+            </div>
+          </article>
+
           <article class="compact-panel">
             <h3>Markers</h3>
             <div class="marker-buttons">

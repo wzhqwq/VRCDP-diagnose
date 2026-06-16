@@ -16,6 +16,7 @@
     zoom?: boolean
     height?: number
     selectedRequestId?: string | null
+    playbackCursorNs?: number | null
     onRangeChange?: (range: RangeNs | null) => void
     onSelectRequest?: (request: RequestSummary) => void
   }
@@ -26,6 +27,7 @@
     zoom = false,
     height = 360,
     selectedRequestId = null,
+    playbackCursorNs = null,
     onRangeChange,
     onSelectRequest,
   }: Props = $props()
@@ -190,6 +192,27 @@
         .attr('d', `M ${x(ns)} ${markerY1 - 2} l 7 12 h -14 z`)
         .attr('fill', '#c93f3f')
       group.append('title').text(glitch.glitch.corruption_type || glitch.glitch.severity || 'glitch')
+    }
+
+    if (playbackCursorNs !== null && playbackCursorNs >= domain.from && playbackCursorNs <= domain.to) {
+      const cursorX = x(playbackCursorNs)
+      const group = svg.append('g').attr('class', 'playback-cursor')
+      group
+        .append('line')
+        .attr('x1', cursorX)
+        .attr('x2', cursorX)
+        .attr('y1', markerY1)
+        .attr('y2', markerY2)
+        .attr('stroke', '#172027')
+        .attr('stroke-width', 2)
+      group
+        .append('text')
+        .attr('x', cursorX + 6)
+        .attr('y', markerY2 - 8)
+        .attr('fill', '#172027')
+        .attr('font-size', 11)
+        .attr('font-weight', 760)
+        .text('playback')
     }
 
     drawMetricBand(svg, x, metricTop, metricHeight, width, margin)

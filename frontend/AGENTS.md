@@ -72,4 +72,5 @@ Use this before adding or changing icon imports. Search by concrete names or int
 - Keep the session list fixed on the left and the selected/current session workspace on the right.
 - The main timeline must show all visible selected-session telemetry, group displayed requests by resource id with URL/request fallback, and alternate request group colors.
 - The main timeline must support range selection; the bottom of the selected session workspace shows the zoomed D3 view and computed range details.
+- The bottom workspace includes a right-side OBS video slot. A loaded local video is bound to an `obs_recording_started` marker, and playback progress projects a cursor onto the main timeline using OBS start/pause/resume/stop marker timestamps.
 - Do not start the dev server or perform browser checks for frontend changes unless the user explicitly requests it; prefer static checks, Svelte autofixer, type checks, and production builds for verification.

@@ -30,7 +30,6 @@ type diagnosticManager struct {
 
 	mu       sync.Mutex
 	started  bool
-	obsWatch bool
 	workerWG sync.WaitGroup
 
 	shutdown atomic.Bool
@@ -59,13 +58,11 @@ func newDiagnosticManager(cfg Config, st store) *diagnosticManager {
 	if st == nil {
 		st = newDBVCStore(cfg)
 	}
-	_, obsWatch := st.(*dbVCStore)
 	return &diagnosticManager{
 		cfg:       cfg,
 		sessionID: newID("session"),
 		startWall: time.Now(),
 		store:     st,
-		obsWatch:  obsWatch,
 		chunkCh:   make(chan chunkRecord, queueSize),
 		done:      make(chan struct{}),
 	}
@@ -101,7 +98,7 @@ func (m *diagnosticManager) Start(ctx context.Context) error {
 
 	m.workerWG.Add(1)
 	go m.chunkWorker()
-	if m.obsWatch {
+	if m.cfg.WatchOBSRecording {
 		m.workerWG.Add(1)
 		go m.obsRecordingWorker()
 	}

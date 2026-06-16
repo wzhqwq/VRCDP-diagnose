@@ -18,6 +18,7 @@ type Config struct {
 	WindowAggregationEnabled bool
 	QueueSize                int
 	DropOnOverflow           bool
+	WatchOBSRecording        bool
 
 	WindowSizes []time.Duration
 }

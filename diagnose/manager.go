@@ -11,7 +11,11 @@ import (
 	"time"
 )
 
-const defaultQueueSize = 1024
+const (
+	defaultQueueSize       = 1024
+	defaultChunkBatchSize  = 64
+	defaultChunkBatchDelay = 50 * time.Millisecond
+)
 
 var fallbackID atomic.Uint64
 
@@ -235,16 +239,62 @@ func (m *diagnosticManager) RuntimeStats() RuntimeStats {
 
 func (m *diagnosticManager) chunkWorker() {
 	defer m.workerWG.Done()
+	batch := make([]chunkRecord, 0, defaultChunkBatchSize)
+	var timer *time.Timer
+	var timerC <-chan time.Time
+
+	stopTimer := func() {
+		if timer == nil {
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timerC = nil
+	}
+	startTimer := func() {
+		if timer == nil {
+			timer = time.NewTimer(defaultChunkBatchDelay)
+		} else {
+			timer.Reset(defaultChunkBatchDelay)
+		}
+		timerC = timer.C
+	}
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		_ = m.store.RecordChunks(context.Background(), batch)
+		batch = batch[:0]
+		stopTimer()
+	}
+	appendRecord := func(record chunkRecord) {
+		if len(batch) == 0 {
+			startTimer()
+		}
+		batch = append(batch, record)
+		if len(batch) >= defaultChunkBatchSize {
+			flush()
+		}
+	}
+
+	defer stopTimer()
 	for {
 		select {
 		case record := <-m.chunkCh:
-			_ = m.store.RecordChunk(context.Background(), record.req, record.ev)
+			appendRecord(record)
+		case <-timerC:
+			flush()
 		case <-m.done:
 			for {
 				select {
 				case record := <-m.chunkCh:
-					_ = m.store.RecordChunk(context.Background(), record.req, record.ev)
+					appendRecord(record)
 				default:
+					flush()
 					return
 				}
 			}

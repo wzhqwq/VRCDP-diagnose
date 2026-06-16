@@ -123,4 +123,5 @@ var Tables = []*db_vc.Table{
 // Init prepares package-level database-dependent state after db_vc.Init has
 // initialized Tables.
 func Init() {
+	prepareStatements()
 }

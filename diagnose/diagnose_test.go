@@ -203,6 +203,32 @@ func TestWrapReadSeekerReturnsOriginalWhenChunkLoggingDisabled(t *testing.T) {
 	}
 }
 
+func TestShutdownFlushesPartialChunkBatch(t *testing.T) {
+	st := &batchRecordingStore{}
+	m := newDiagnosticManager(Config{Enabled: true, QueueSize: 8}, st)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	ref := RequestRef{SessionID: m.SessionID(), RequestID: "request_test"}
+	m.RecordChunk(ref, ChunkEvent{Seq: 1})
+	m.RecordChunk(ref, ChunkEvent{Seq: 2})
+	m.RecordChunk(ref, ChunkEvent{Seq: 3})
+
+	if err := m.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown returned error: %v", err)
+	}
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.batches) != 1 {
+		t.Fatalf("chunk batches = %d, want 1", len(st.batches))
+	}
+	if got := len(st.batches[0]); got != 3 {
+		t.Fatalf("batch size = %d, want 3", got)
+	}
+}
+
 func TestEndHTTPFillsMissingTimeAndDuration(t *testing.T) {
 	st := &recordingStore{}
 	m := newDiagnosticManager(Config{Enabled: true}, st)
@@ -357,6 +383,10 @@ func (s testStore) RecordChunk(ctx context.Context, ref RequestRef, ev ChunkEven
 	return nil
 }
 
+func (s testStore) RecordChunks(ctx context.Context, records []chunkRecord) error {
+	return nil
+}
+
 func (s testStore) RecordMarker(ctx context.Context, sessionID, markerID string, marker MarkerEvent) error {
 	return nil
 }
@@ -429,5 +459,19 @@ func (s *recordingStore) EndRequest(ctx context.Context, ref RequestRef, end Req
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ends = append(s.ends, end)
+	return nil
+}
+
+type batchRecordingStore struct {
+	testStore
+	mu      sync.Mutex
+	batches [][]chunkRecord
+}
+
+func (s *batchRecordingStore) RecordChunks(ctx context.Context, records []chunkRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copied := append([]chunkRecord(nil), records...)
+	s.batches = append(s.batches, copied)
 	return nil
 }

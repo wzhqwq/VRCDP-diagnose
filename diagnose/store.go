@@ -8,6 +8,7 @@ type store interface {
 	BeginRequest(ctx context.Context, ref RequestRef, info RequestStart) error
 	EndRequest(ctx context.Context, ref RequestRef, end RequestEnd) error
 	RecordChunk(ctx context.Context, ref RequestRef, ev ChunkEvent) error
+	RecordChunks(ctx context.Context, records []chunkRecord) error
 	RecordMarker(ctx context.Context, sessionID, markerID string, marker MarkerEvent) error
 	RecordGlitch(ctx context.Context, sessionID, glitchID string, glitch GlitchEvent) error
 	UpdateGlitch(ctx context.Context, sessionID, glitchID string, glitch GlitchEvent) error

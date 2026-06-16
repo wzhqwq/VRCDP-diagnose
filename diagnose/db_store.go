@@ -97,6 +97,11 @@ var listWindows = windowMetricsTable.Select(
 var listMarkers = markersTable.Select("marker_id", "event_json").Where("session_id = ?").Sort("process_uptime_ns", true).Build()
 var listGlitches = glitchesTable.Select("glitch_id", "event_json").Where("session_id = ?").Sort("process_uptime_ns", true).Build()
 
+var (
+	insertChunkStmt  *sql.Stmt
+	upsertWindowStmt *sql.Stmt
+)
+
 type dbVCStore struct {
 	cfg         Config
 	windowSizes []int
@@ -114,7 +119,7 @@ func (s *dbVCStore) StartSession(ctx context.Context, session sessionInfo) error
 	if err != nil {
 		return err
 	}
-	_, err = safeExec(sessionsTable, upsertSession,
+	_, err = safeExec(ctx, sessionsTable, upsertSession,
 		session.SessionID,
 		session.SessionLabel,
 		session.StartWallTime,
@@ -126,7 +131,7 @@ func (s *dbVCStore) StartSession(ctx context.Context, session sessionInfo) error
 }
 
 func (s *dbVCStore) RegisterPacingProfile(ctx context.Context, sessionID string, profile PacingProfile) error {
-	_, err := safeExec(pacingProfilesTable, upsertPacingProfile,
+	_, err := safeExec(ctx, pacingProfilesTable, upsertPacingProfile,
 		sessionID+":"+profile.Name,
 		sessionID,
 		profile.Name,
@@ -148,7 +153,7 @@ func (s *dbVCStore) BeginRequest(ctx context.Context, ref RequestRef, info Reque
 	if err != nil {
 		return err
 	}
-	_, err = safeExec(requestsTable, insertRequest,
+	_, err = safeExec(ctx, requestsTable, insertRequest,
 		ref.RequestID,
 		ref.SessionID,
 		info.ResourceID,
@@ -170,7 +175,7 @@ func (s *dbVCStore) EndRequest(ctx context.Context, ref RequestRef, end RequestE
 	if err != nil {
 		return err
 	}
-	_, err = safeExec(requestsTable, endRequest,
+	_, err = safeExec(ctx, requestsTable, endRequest,
 		end.Time.ProcessUptimeNs,
 		endJSON,
 		0,
@@ -188,33 +193,69 @@ func (s *dbVCStore) RecordChunk(ctx context.Context, ref RequestRef, ev ChunkEve
 	if err != nil {
 		return err
 	}
-	chunkID := fmt.Sprintf("%s:%s:%d", ref.SessionID, ref.RequestID, ev.Seq)
-	_, err = safeExec(chunkEventsTable, insertChunk,
-		chunkID,
-		ref.SessionID,
-		ref.RequestID,
-		ev.Seq,
-		chunkTimeNs(ev),
-		ev.TimeAfterRead.ProcessUptimeNs,
-		ev.ReadBytes,
-		ev.WriteBytes,
-		ev.CumulativeBytes,
-		ev.AllowanceBefore,
-		ev.AllowanceAfter,
-		ev.SleepRequestedNs,
-		ev.SleepActualNs,
-		ev.ReadDurationNs,
-		ev.WriteDurationNs,
-		ev.FlushDurationNs,
-		ev.Error,
-		eventJSON,
-	)
+	_, err = safeExecPrepared(ctx, insertChunkStmt, chunkEventsTable, insertChunk, chunkArgs(ref, ev, eventJSON)...)
 	if err != nil {
 		return normalizeStoreErr(err)
 	}
 	if s.cfg.WindowAggregationEnabled {
-		return s.recordWindows(ref, ev)
+		return s.recordWindows(ctx, ref, ev)
 	}
+	return nil
+}
+
+func (s *dbVCStore) RecordChunks(ctx context.Context, records []chunkRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	if len(records) == 1 {
+		return s.RecordChunk(ctx, records[0].req, records[0].ev)
+	}
+
+	tx, err := safeTx(ctx, chunkEventsTable)
+	if err != nil {
+		return normalizeStoreErr(err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	chunkStmt, err := txStatement(ctx, tx, insertChunkStmt, insertChunk)
+	if err != nil {
+		return normalizeStoreErr(err)
+	}
+	defer chunkStmt.Close()
+
+	var windowStmt *sql.Stmt
+	if s.cfg.WindowAggregationEnabled {
+		windowStmt, err = txStatement(ctx, tx, upsertWindowStmt, upsertWindow)
+		if err != nil {
+			return normalizeStoreErr(err)
+		}
+		defer windowStmt.Close()
+	}
+
+	for _, record := range records {
+		eventJSON, err := jsonText(record.ev)
+		if err != nil {
+			return err
+		}
+		if _, err := chunkStmt.ExecContext(contextOrBackground(ctx), chunkArgs(record.req, record.ev, eventJSON)...); err != nil {
+			return normalizeStoreErr(err)
+		}
+		if s.cfg.WindowAggregationEnabled {
+			if err := s.recordWindowsWithStmt(ctx, windowStmt, record.req, record.ev); err != nil {
+				return err
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return normalizeStoreErr(err)
+	}
+	committed = true
 	return nil
 }
 
@@ -223,7 +264,7 @@ func (s *dbVCStore) RecordMarker(ctx context.Context, sessionID, markerID string
 	if err != nil {
 		return err
 	}
-	_, err = safeExec(markersTable, insertMarker,
+	_, err = safeExec(ctx, markersTable, insertMarker,
 		markerID,
 		sessionID,
 		marker.Time.ProcessUptimeNs,
@@ -241,7 +282,7 @@ func (s *dbVCStore) RecordGlitch(ctx context.Context, sessionID, glitchID string
 	if err != nil {
 		return err
 	}
-	_, err = safeExec(glitchesTable, insertGlitch,
+	_, err = safeExec(ctx, glitchesTable, insertGlitch,
 		glitchID,
 		sessionID,
 		glitch.Time.ProcessUptimeNs,
@@ -265,7 +306,7 @@ func (s *dbVCStore) UpdateGlitch(ctx context.Context, sessionID, glitchID string
 	if err != nil {
 		return err
 	}
-	_, err = safeExec(glitchesTable, updateGlitch,
+	_, err = safeExec(ctx, glitchesTable, updateGlitch,
 		sessionID,
 		glitch.Time.ProcessUptimeNs,
 		glitch.Time.WallRFC3339Nano,
@@ -285,12 +326,12 @@ func (s *dbVCStore) UpdateGlitch(ctx context.Context, sessionID, glitchID string
 }
 
 func (s *dbVCStore) DeleteGlitch(ctx context.Context, glitchID string) error {
-	_, err := safeExec(glitchesTable, deleteGlitch, glitchID)
+	_, err := safeExec(ctx, glitchesTable, deleteGlitch, glitchID)
 	return normalizeStoreErr(err)
 }
 
 func (s *dbVCStore) ListSessions(ctx context.Context) ([]sessionSummary, error) {
-	rows, err := safeQuery(sessionsTable, listSessions)
+	rows, err := safeQuery(ctx, sessionsTable, listSessions)
 	if err != nil {
 		return nil, normalizeStoreErr(err)
 	}
@@ -308,7 +349,7 @@ func (s *dbVCStore) ListSessions(ctx context.Context) ([]sessionSummary, error) 
 }
 
 func (s *dbVCStore) GetSession(ctx context.Context, sessionID string) (sessionSummary, bool, error) {
-	rows, err := safeQuery(sessionsTable, getSession, sessionID)
+	rows, err := safeQuery(ctx, sessionsTable, getSession, sessionID)
 	if err != nil {
 		return sessionSummary{}, false, normalizeStoreErr(err)
 	}
@@ -324,7 +365,7 @@ func (s *dbVCStore) GetSession(ctx context.Context, sessionID string) (sessionSu
 }
 
 func (s *dbVCStore) ListRequests(ctx context.Context, sessionID string) ([]requestSummary, error) {
-	rows, err := safeQuery(requestsTable, listRequests, sessionID)
+	rows, err := safeQuery(ctx, requestsTable, listRequests, sessionID)
 	if err != nil {
 		return nil, normalizeStoreErr(err)
 	}
@@ -333,7 +374,7 @@ func (s *dbVCStore) ListRequests(ctx context.Context, sessionID string) ([]reque
 }
 
 func (s *dbVCStore) GetRequest(ctx context.Context, requestID string) (requestSummary, bool, error) {
-	rows, err := safeQuery(requestsTable, getRequest, requestID)
+	rows, err := safeQuery(ctx, requestsTable, getRequest, requestID)
 	if err != nil {
 		return requestSummary{}, false, normalizeStoreErr(err)
 	}
@@ -349,7 +390,7 @@ func (s *dbVCStore) GetRequest(ctx context.Context, requestID string) (requestSu
 }
 
 func (s *dbVCStore) ListChunks(ctx context.Context, requestID string) ([]chunkSummary, error) {
-	rows, err := safeQuery(chunkEventsTable, listChunks, requestID)
+	rows, err := safeQuery(ctx, chunkEventsTable, listChunks, requestID)
 	if err != nil {
 		return nil, normalizeStoreErr(err)
 	}
@@ -371,7 +412,7 @@ func (s *dbVCStore) ListChunks(ctx context.Context, requestID string) ([]chunkSu
 }
 
 func (s *dbVCStore) ListWindows(ctx context.Context, requestID string, windowMS int) ([]windowMetric, error) {
-	rows, err := safeQuery(windowMetricsTable, listWindows, requestID, windowMS)
+	rows, err := safeQuery(ctx, windowMetricsTable, listWindows, requestID, windowMS)
 	if err != nil {
 		return nil, normalizeStoreErr(err)
 	}
@@ -403,47 +444,42 @@ func (s *dbVCStore) ListWindows(ctx context.Context, requestID string, windowMS 
 }
 
 func (s *dbVCStore) ListMarkers(ctx context.Context, sessionID string) ([]markerSummary, error) {
-	rows, err := safeQuery(markersTable, listMarkers, sessionID)
+	rows, err := safeQuery(ctx, markersTable, listMarkers, sessionID)
 	if err != nil {
 		return nil, normalizeStoreErr(err)
 	}
-	defer rows.Close()
-
-	var markers []markerSummary
-	for rows.Next() {
-		var marker markerSummary
-		var eventJSON string
-		if err := rows.Scan(&marker.MarkerID, &eventJSON); err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal([]byte(eventJSON), &marker.Marker); err != nil {
-			return nil, err
-		}
-		markers = append(markers, marker)
-	}
-	return markers, rows.Err()
+	return scanEventSummaries(rows, func(id string, event MarkerEvent) markerSummary {
+		return markerSummary{MarkerID: id, Marker: event}
+	})
 }
 
 func (s *dbVCStore) ListGlitches(ctx context.Context, sessionID string) ([]glitchSummary, error) {
-	rows, err := safeQuery(glitchesTable, listGlitches, sessionID)
+	rows, err := safeQuery(ctx, glitchesTable, listGlitches, sessionID)
 	if err != nil {
 		return nil, normalizeStoreErr(err)
 	}
+	return scanEventSummaries(rows, func(id string, event GlitchEvent) glitchSummary {
+		return glitchSummary{GlitchID: id, Glitch: event}
+	})
+}
+
+func scanEventSummaries[E any, S any](rows *sql.Rows, build func(id string, event E) S) ([]S, error) {
 	defer rows.Close()
 
-	var glitches []glitchSummary
+	var summaries []S
 	for rows.Next() {
-		var glitch glitchSummary
+		var id string
+		var event E
 		var eventJSON string
-		if err := rows.Scan(&glitch.GlitchID, &eventJSON); err != nil {
+		if err := rows.Scan(&id, &eventJSON); err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal([]byte(eventJSON), &glitch.Glitch); err != nil {
+		if err := json.Unmarshal([]byte(eventJSON), &event); err != nil {
 			return nil, err
 		}
-		glitches = append(glitches, glitch)
+		summaries = append(summaries, build(id, event))
 	}
-	return glitches, rows.Err()
+	return summaries, rows.Err()
 }
 
 func (s *dbVCStore) GetTimeline(ctx context.Context, sessionID string) (timelineSummary, error) {
@@ -472,7 +508,15 @@ func (s *dbVCStore) Close(ctx context.Context) error {
 	return nil
 }
 
-func (s *dbVCStore) recordWindows(ref RequestRef, ev ChunkEvent) error {
+func (s *dbVCStore) recordWindows(ctx context.Context, ref RequestRef, ev ChunkEvent) error {
+	return s.recordWindowsWithExec(ctx, ref, ev)
+}
+
+func (s *dbVCStore) recordWindowsWithExec(ctx context.Context, ref RequestRef, ev ChunkEvent) error {
+	return s.recordWindowsWithStmt(ctx, nil, ref, ev)
+}
+
+func (s *dbVCStore) recordWindowsWithStmt(ctx context.Context, stmt *sql.Stmt, ref RequestRef, ev ChunkEvent) error {
 	timeNs := chunkTimeNs(ev)
 	if timeNs <= 0 || ev.WriteBytes <= 0 {
 		return nil
@@ -483,7 +527,7 @@ func (s *dbVCStore) recordWindows(ref RequestRef, ev ChunkEvent) error {
 		windowEnd := windowStart + windowNs
 		metricID := fmt.Sprintf("%s:%s:%d:%d", ref.SessionID, ref.RequestID, windowMS, windowStart)
 		effectiveMbps := float64(ev.WriteBytes*8) / float64(windowMS) / 1000.0
-		if _, err := safeExec(windowMetricsTable, upsertWindow,
+		args := []any{
 			metricID,
 			ref.SessionID,
 			ref.RequestID,
@@ -498,7 +542,14 @@ func (s *dbVCStore) recordWindows(ref RequestRef, ev ChunkEvent) error {
 			ev.SleepActualNs,
 			ev.AllowanceBefore,
 			ev.AllowanceAfter,
-		); err != nil {
+		}
+		var err error
+		if stmt != nil {
+			_, err = stmt.ExecContext(contextOrBackground(ctx), args...)
+		} else {
+			_, err = safeExecPrepared(ctx, upsertWindowStmt, windowMetricsTable, upsertWindow, args...)
+		}
+		if err != nil {
 			return normalizeStoreErr(err)
 		}
 	}
@@ -563,6 +614,30 @@ func boolInt(v bool) int {
 	return 0
 }
 
+func chunkArgs(ref RequestRef, ev ChunkEvent, eventJSON string) []any {
+	chunkID := fmt.Sprintf("%s:%s:%d", ref.SessionID, ref.RequestID, ev.Seq)
+	return []any{
+		chunkID,
+		ref.SessionID,
+		ref.RequestID,
+		ev.Seq,
+		chunkTimeNs(ev),
+		ev.TimeAfterRead.ProcessUptimeNs,
+		ev.ReadBytes,
+		ev.WriteBytes,
+		ev.CumulativeBytes,
+		ev.AllowanceBefore,
+		ev.AllowanceAfter,
+		ev.SleepRequestedNs,
+		ev.SleepActualNs,
+		ev.ReadDurationNs,
+		ev.WriteDurationNs,
+		ev.FlushDurationNs,
+		ev.Error,
+		eventJSON,
+	}
+}
+
 func chunkTimeNs(ev ChunkEvent) int64 {
 	for _, candidate := range []int64{
 		ev.TimeBeforeRead.ProcessUptimeNs,
@@ -602,14 +677,67 @@ func windowSizesFromConfig(cfg Config) []int {
 	return windows
 }
 
-func safeExec(table *db_vc.Table, query string, args ...any) (result sql.Result, err error) {
+func safeExec(ctx context.Context, table *db_vc.Table, query string, args ...any) (result sql.Result, err error) {
 	defer recoverDBVCPanic(&err)
-	return table.Exec(query, args...)
+	return table.ExecContext(contextOrBackground(ctx), query, args...)
 }
 
-func safeQuery(table *db_vc.Table, query string, args ...any) (rows *sql.Rows, err error) {
+func safeExecPrepared(ctx context.Context, stmt *sql.Stmt, table *db_vc.Table, query string, args ...any) (result sql.Result, err error) {
+	if stmt != nil {
+		return stmt.ExecContext(contextOrBackground(ctx), args...)
+	}
+	return safeExec(ctx, table, query, args...)
+}
+
+func safeQuery(ctx context.Context, table *db_vc.Table, query string, args ...any) (rows *sql.Rows, err error) {
 	defer recoverDBVCPanic(&err)
-	return table.Query(query, args...)
+	return table.QueryContext(contextOrBackground(ctx), query, args...)
+}
+
+func safeTx(ctx context.Context, table *db_vc.Table) (tx *sql.Tx, err error) {
+	defer recoverDBVCPanic(&err)
+	return table.TxContext(contextOrBackground(ctx))
+}
+
+func txStatement(ctx context.Context, tx *sql.Tx, prepared *sql.Stmt, query string) (*sql.Stmt, error) {
+	if prepared != nil {
+		return tx.StmtContext(contextOrBackground(ctx), prepared), nil
+	}
+	return tx.PrepareContext(contextOrBackground(ctx), query)
+}
+
+func prepareStatements() {
+	closePreparedStatements()
+	insertChunkStmt = mustPrepare(chunkEventsTable, insertChunk)
+	upsertWindowStmt = mustPrepare(windowMetricsTable, upsertWindow)
+}
+
+func closePreparedStatements() {
+	closePreparedStatement(&insertChunkStmt)
+	closePreparedStatement(&upsertWindowStmt)
+}
+
+func closePreparedStatement(stmt **sql.Stmt) {
+	if *stmt == nil {
+		return
+	}
+	_ = (*stmt).Close()
+	*stmt = nil
+}
+
+func mustPrepare(table *db_vc.Table, query string) *sql.Stmt {
+	stmt, err := table.Prepare(query)
+	if err != nil {
+		panic(err)
+	}
+	return stmt
+}
+
+func contextOrBackground(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 func recoverDBVCPanic(err *error) {

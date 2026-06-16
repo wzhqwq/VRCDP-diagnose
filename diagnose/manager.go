@@ -30,6 +30,7 @@ type diagnosticManager struct {
 
 	mu       sync.Mutex
 	started  bool
+	obsWatch bool
 	workerWG sync.WaitGroup
 
 	shutdown atomic.Bool
@@ -58,11 +59,13 @@ func newDiagnosticManager(cfg Config, st store) *diagnosticManager {
 	if st == nil {
 		st = newDBVCStore(cfg)
 	}
+	_, obsWatch := st.(*dbVCStore)
 	return &diagnosticManager{
 		cfg:       cfg,
 		sessionID: newID("session"),
 		startWall: time.Now(),
 		store:     st,
+		obsWatch:  obsWatch,
 		chunkCh:   make(chan chunkRecord, queueSize),
 		done:      make(chan struct{}),
 	}
@@ -98,6 +101,10 @@ func (m *diagnosticManager) Start(ctx context.Context) error {
 
 	m.workerWG.Add(1)
 	go m.chunkWorker()
+	if m.obsWatch {
+		m.workerWG.Add(1)
+		go m.obsRecordingWorker()
+	}
 	return nil
 }
 
@@ -300,42 +307,6 @@ func (m *diagnosticManager) chunkWorker() {
 			}
 		}
 	}
-}
-
-type noopManager struct{}
-
-func (m noopManager) Start(ctx context.Context) error { return nil }
-
-func (m noopManager) Shutdown(ctx context.Context) error { return nil }
-
-func (m noopManager) Enabled() bool { return false }
-
-func (m noopManager) SessionID() string { return "" }
-
-func (m noopManager) Now() TimePoint { return nowTimePoint() }
-
-func (m noopManager) HTTPHandler() http.Handler { return http.NotFoundHandler() }
-
-func (m noopManager) RegisterPacingProfile(profile PacingProfile) {}
-
-func (m noopManager) BeginRequest(ctx context.Context, info RequestStart) (RequestRef, error) {
-	return RequestRef{}, nil
-}
-
-func (m noopManager) RecordChunk(req RequestRef, ev ChunkEvent) {}
-
-func (m noopManager) EndRequest(req RequestRef, end RequestEnd) {}
-
-func (m noopManager) RecordMarker(ctx context.Context, marker MarkerEvent) (string, error) {
-	return "", nil
-}
-
-func (m noopManager) RecordGlitch(ctx context.Context, glitch GlitchEvent) (string, error) {
-	return "", nil
-}
-
-func (m noopManager) RuntimeStats() RuntimeStats {
-	return RuntimeStats{}
 }
 
 func isZeroTimePoint(t TimePoint) bool {

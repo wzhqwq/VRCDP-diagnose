@@ -54,9 +54,7 @@ Do not add JSONL or in-memory persistence as a temporary replacement.
 
 ```go
 type Config struct {
-	Enabled                  bool
 	SessionLabel             string
-	StoragePath              string
 	ChunkLoggingEnabled      bool
 	WindowAggregationEnabled bool
 	QueueSize                int
@@ -69,8 +67,6 @@ type Config struct {
 Expected behavior:
 
 ```text
-Enabled=false should make diagnostics effectively no-op.
-StoragePath defines where diagnostic data should be stored.
 ChunkLoggingEnabled controls high-volume per-chunk logging.
 WindowAggregationEnabled controls short-window metrics generation.
 QueueSize controls the internal async event queue.
@@ -129,14 +125,7 @@ HTTPHandler should expose diagnostics API routes only. The main project owns the
 func NewManager(cfg Config) Manager
 ```
 
-For the initial stub, this may return a no-op manager.
-
-Codex should replace or extend it so that:
-
-```text
-Enabled=false returns a no-op implementation.
-Enabled=true returns the real diagnostics manager.
-```
+NewManager returns the real diagnostics manager.
 
 ---
 
@@ -499,7 +488,7 @@ Expected behavior:
 ```text
 BeginHTTP builds RequestStart metadata from the HTTP request, stores RequestRef in context, and honors provided request/resource IDs.
 EndHTTP explicitly ends the request; missing time and duration are filled by the manager.
-WrapReadSeeker returns the original reader when context has no active diagnostic request, diagnostics are disabled, chunk logging is disabled, or reader is nil.
+WrapReadSeeker returns the original reader when context has no active diagnostic request, chunk logging is disabled, or reader is nil.
 Preserve io.ReadSeeker behavior for http.ServeContent.
 Record one ChunkEvent per successful Read.
 Record read timing and read byte counts.
@@ -518,12 +507,6 @@ Preferred storage:
 
 ```text
 SQLite
-```
-
-Fallback acceptable for early MVP:
-
-```text
-JSONL files per session
 ```
 
 Preferred SQLite tables:
@@ -1044,14 +1027,14 @@ Codex should first implement:
 
 ```text
 1. Real Manager implementation behind the stub interface.
-2. No-op Manager for Enabled=false.
-3. Session creation on Start.
-4. SQLite or JSONL storage.
-5. Request start/end logging.
-6. Async chunk event ingestion.
-7. RuntimeStats counters.
-8. Manual marker recording.
-9. Manual glitch recording.
+2. Session creation on Start.
+3. db_vc-backed SQLite storage.
+4. Request start/end logging.
+5. Async chunk event ingestion.
+6. RuntimeStats counters.
+7. Manual marker recording.
+8. Manual glitch recording.
+9. OBS start/stop recording markers through obs-websocket.
 10. 50ms and 100ms window aggregation.
 11. Minimal HTTP API.
 12. Minimal frontend:

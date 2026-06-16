@@ -28,7 +28,7 @@ Important:
 - Call `db_vc.Init(...)` before creating or starting an enabled diagnostics manager.
 - Call `diagnose.Init()` after `db_vc.Init(...)`.
 - If an enabled manager is used before the tables are initialized, storage calls return an initialization error.
-- `Enabled=false` returns a no-op manager and does not require database initialization.
+- Create and start the manager only after database initialization.
 
 ## 2. Manager Lifecycle
 
@@ -36,7 +36,6 @@ Create one manager for the process/session, start it after database initializati
 
 ```go
 diag := diagnose.NewManager(diagnose.Config{
-	Enabled:                  true,
 	SessionLabel:             "local-vrchat-test",
 	ChunkLoggingEnabled:      true,
 	WindowAggregationEnabled: true,
@@ -56,7 +55,6 @@ defer diag.Shutdown(context.Background())
 
 Runtime behavior:
 
-- `Enabled=false` makes all calls effectively no-op.
 - `RecordChunk` uses an async queue and does not write to SQLite directly on the hot path.
 - `DropOnOverflow=true` drops chunk events instead of blocking video serving.
 - `Shutdown` drains queued chunk events where possible.
@@ -217,7 +215,22 @@ glitchID, err := diag.RecordGlitch(ctx, diagnose.GlitchEvent{
 
 If `Time` is omitted, the manager stamps the event with `diag.Now()`.
 
-## 8. Operational Notes
+## 8. OBS Recording Markers
+
+When the manager starts, it also attempts to connect to OBS through obs-websocket on the hard-coded endpoint `127.0.0.1:4455` with the hard-coded password in `diagnose/obs.go`.
+
+The OBS watcher subscribes to output events and records these markers:
+
+```text
+obs_recording_started
+obs_recording_stopped
+obs_recording_paused
+obs_recording_resumed
+```
+
+The marker source is `obs-websocket`; markers include the OBS output path in the note when OBS provides it.
+
+## 9. Operational Notes
 
 - Keep diagnostics failures out of the video-serving critical path where possible.
 - Use `RuntimeStats()` or `GET /api/stats` to monitor queue length and dropped chunk events.

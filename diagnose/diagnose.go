@@ -13,9 +13,7 @@ var processStartedAt = time.Now()
 
 // Config controls the diagnostics subsystem.
 type Config struct {
-	Enabled                  bool
 	SessionLabel             string
-	StoragePath              string
 	ChunkLoggingEnabled      bool
 	WindowAggregationEnabled bool
 	QueueSize                int
@@ -47,11 +45,8 @@ type Manager interface {
 	RuntimeStats() RuntimeStats
 }
 
-// NewManager returns either a no-op or enabled diagnostics manager.
+// NewManager returns a diagnostics manager.
 func NewManager(cfg Config) Manager {
-	if !cfg.Enabled {
-		return noopManager{}
-	}
 	return newDiagnosticManager(cfg, newDBVCStore(cfg))
 }
 

@@ -8,27 +8,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-func TestNewManagerDisabledIsNoop(t *testing.T) {
-	m := NewManager(Config{Enabled: false})
-
-	if m.Enabled() {
-		t.Fatal("disabled manager reported enabled")
-	}
-	if got := m.SessionID(); got != "" {
-		t.Fatalf("disabled manager session ID = %q, want empty", got)
-	}
-	if stats := m.RuntimeStats(); stats.Enabled {
-		t.Fatal("disabled manager stats reported enabled")
-	}
-}
-
 func TestEnabledManagerStartStats(t *testing.T) {
-	m := newDiagnosticManager(Config{Enabled: true}, testStore{})
+	m := newDiagnosticManager(Config{}, testStore{})
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -55,7 +42,6 @@ func TestEnabledManagerStartStats(t *testing.T) {
 
 func TestRecordChunkDropOnOverflowCounters(t *testing.T) {
 	m := NewManager(Config{
-		Enabled:        true,
 		QueueSize:      1,
 		DropOnOverflow: true,
 	})
@@ -80,7 +66,7 @@ func TestRecordChunkDropOnOverflowCounters(t *testing.T) {
 
 func TestBeginHTTPStoresProvidedRequestAndResourceID(t *testing.T) {
 	st := &recordingStore{}
-	m := newDiagnosticManager(Config{Enabled: true}, st)
+	m := newDiagnosticManager(Config{}, st)
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -121,23 +107,8 @@ func TestBeginHTTPStoresProvidedRequestAndResourceID(t *testing.T) {
 	}
 }
 
-func TestBeginHTTPDisabledManagerNoops(t *testing.T) {
-	ctx, ref, err := BeginHTTP(context.Background(), NewManager(Config{Enabled: false}), nil, RequestOptions{
-		RequestID: "request_disabled",
-	})
-	if err != nil {
-		t.Fatalf("BeginHTTP returned error: %v", err)
-	}
-	if !ref.IsZero() {
-		t.Fatalf("ref = %+v, want zero", ref)
-	}
-	if _, ok := RequestRefFromContext(ctx); ok {
-		t.Fatal("disabled BeginHTTP stored request ref in context")
-	}
-}
-
 func TestWrapReadSeekerContextRecordsChunk(t *testing.T) {
-	m := newDiagnosticManager(Config{Enabled: true, ChunkLoggingEnabled: true, QueueSize: 4}, testStore{})
+	m := newDiagnosticManager(Config{ChunkLoggingEnabled: true, QueueSize: 4}, testStore{})
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -183,7 +154,7 @@ func TestWrapReadSeekerReturnsOriginalWithoutActiveContext(t *testing.T) {
 }
 
 func TestWrapReadSeekerReturnsOriginalWhenChunkLoggingDisabled(t *testing.T) {
-	m := newDiagnosticManager(Config{Enabled: true, ChunkLoggingEnabled: false}, testStore{})
+	m := newDiagnosticManager(Config{ChunkLoggingEnabled: false}, testStore{})
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -205,7 +176,7 @@ func TestWrapReadSeekerReturnsOriginalWhenChunkLoggingDisabled(t *testing.T) {
 
 func TestShutdownFlushesPartialChunkBatch(t *testing.T) {
 	st := &batchRecordingStore{}
-	m := newDiagnosticManager(Config{Enabled: true, QueueSize: 8}, st)
+	m := newDiagnosticManager(Config{QueueSize: 8}, st)
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -231,7 +202,7 @@ func TestShutdownFlushesPartialChunkBatch(t *testing.T) {
 
 func TestEndHTTPFillsMissingTimeAndDuration(t *testing.T) {
 	st := &recordingStore{}
-	m := newDiagnosticManager(Config{Enabled: true}, st)
+	m := newDiagnosticManager(Config{}, st)
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -266,7 +237,7 @@ func TestEndHTTPWithoutDiagnosticContextNoops(t *testing.T) {
 }
 
 func TestAPIStatsMarkersAndGlitches(t *testing.T) {
-	m := newDiagnosticManager(Config{Enabled: true}, testStore{})
+	m := newDiagnosticManager(Config{}, testStore{})
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -325,7 +296,7 @@ func TestAPIStatsMarkersAndGlitches(t *testing.T) {
 
 func TestAPITimelinePassesRangeAndWindowQuery(t *testing.T) {
 	st := &timelineRecordingStore{}
-	m := newDiagnosticManager(Config{Enabled: true}, st)
+	m := newDiagnosticManager(Config{}, st)
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -390,6 +361,57 @@ func TestRequestStartFromHTTP(t *testing.T) {
 	}
 	if start.BurstPolicy != "allow_burst" {
 		t.Fatalf("BurstPolicy = %q, want allow_burst", start.BurstPolicy)
+	}
+}
+
+func TestOBSAuthStringUsesProtocolAlgorithm(t *testing.T) {
+	got := obsAuthString(
+		"supersecretpassword",
+		"lM1GncleQOaCu9lT1yeUZhFYnqhsLLP1G5lAGo3ixaI=",
+		"+IxH4CnCiqpX1rM9scsNynZzbOe4KhDeYcTNS3PDaeY=",
+	)
+	if got != "1Ct943GAT+6YQUUX47Ia/ncufilbe6+oD6lY+5kaCu4=" {
+		t.Fatalf("auth = %q, want protocol algorithm result", got)
+	}
+}
+
+func TestOBSRecordingMarker(t *testing.T) {
+	now := TimePoint{WallUnixNano: 1, WallRFC3339Nano: "now", ProcessUptimeNs: 2}
+
+	start, ok := obsRecordingMarker(now, json.RawMessage(`{"outputActive":true,"outputState":"OBS_WEBSOCKET_OUTPUT_STARTED","outputPath":null}`))
+	if !ok {
+		t.Fatal("started event did not produce marker")
+	}
+	if start.Label != "obs_recording_started" || start.Source != "obs-websocket" || start.Time != now {
+		t.Fatalf("start marker = %+v", start)
+	}
+
+	stop, ok := obsRecordingMarker(now, json.RawMessage(`{"outputActive":false,"outputState":"OBS_WEBSOCKET_OUTPUT_STOPPED","outputPath":"C:/recordings/test.mp4"}`))
+	if !ok {
+		t.Fatal("stopped event did not produce marker")
+	}
+	if stop.Label != "obs_recording_stopped" || !strings.Contains(stop.Note, "C:/recordings/test.mp4") {
+		t.Fatalf("stop marker = %+v", stop)
+	}
+
+	pause, ok := obsRecordingMarker(now, json.RawMessage(`{"outputActive":true,"outputState":"OBS_WEBSOCKET_OUTPUT_PAUSED","outputPath":null}`))
+	if !ok {
+		t.Fatal("paused event did not produce marker")
+	}
+	if pause.Label != "obs_recording_paused" {
+		t.Fatalf("pause marker = %+v", pause)
+	}
+
+	resume, ok := obsRecordingMarker(now, json.RawMessage(`{"outputActive":true,"outputState":"OBS_WEBSOCKET_OUTPUT_RESUMED","outputPath":null}`))
+	if !ok {
+		t.Fatal("resumed event did not produce marker")
+	}
+	if resume.Label != "obs_recording_resumed" {
+		t.Fatalf("resume marker = %+v", resume)
+	}
+
+	if _, ok := obsRecordingMarker(now, json.RawMessage(`{"outputState":"OBS_WEBSOCKET_OUTPUT_STARTING"}`)); ok {
+		t.Fatal("transient state produced marker")
 	}
 }
 

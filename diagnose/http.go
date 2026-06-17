@@ -4,42 +4,47 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 type apiHandler struct {
 	manager *diagnosticManager
-	mux     *http.ServeMux
+	apiMux  *http.ServeMux
+	static  http.Handler
 }
 
 func newAPIHandler(manager *diagnosticManager) http.Handler {
 	h := apiHandler{
 		manager: manager,
-		mux:     http.NewServeMux(),
+		apiMux:  http.NewServeMux(),
 	}
 	h.RegisterHandlers()
 	return h
 }
 
 func (h apiHandler) RegisterHandlers() {
-	h.mux.HandleFunc("/api/stats", h.handleStats)
-	h.mux.HandleFunc("/api/sessions", h.handleSessions)
-	h.mux.HandleFunc("/api/sessions/{session_id}", h.handleSession)
-	h.mux.HandleFunc("/api/sessions/{session_id}/requests", h.handleSessionRequests)
-	h.mux.HandleFunc("/api/sessions/{session_id}/timeline", h.handleSessionTimeline)
-	h.mux.HandleFunc("/api/sessions/{session_id}/markers", h.handleSessionMarkers)
-	h.mux.HandleFunc("/api/sessions/{session_id}/glitches", h.handleSessionGlitches)
-	h.mux.HandleFunc("/api/markers", h.handleMarkers)
-	h.mux.HandleFunc("/api/glitches", h.handleGlitches)
-	h.mux.HandleFunc("/api/glitches/{glitch_id}", h.handleGlitch)
-	h.mux.HandleFunc("/api/requests/{request_id}", h.handleRequest)
-	h.mux.HandleFunc("/api/requests/{request_id}/windows", h.handleRequestWindows)
-	h.mux.HandleFunc("/api/requests/{request_id}/chunks", h.handleRequestChunks)
-	h.mux.Handle("/api/", http.NotFoundHandler())
-	h.mux.Handle("/", http.FileServerFS(staticFS{}))
+	h.apiMux.HandleFunc("/api/stats", h.handleStats)
+	h.apiMux.HandleFunc("/api/sessions", h.handleSessions)
+	h.apiMux.HandleFunc("/api/sessions/{session_id}", h.handleSession)
+	h.apiMux.HandleFunc("/api/sessions/{session_id}/requests", h.handleSessionRequests)
+	h.apiMux.HandleFunc("/api/sessions/{session_id}/timeline", h.handleSessionTimeline)
+	h.apiMux.HandleFunc("/api/sessions/{session_id}/markers", h.handleSessionMarkers)
+	h.apiMux.HandleFunc("/api/sessions/{session_id}/glitches", h.handleSessionGlitches)
+	h.apiMux.HandleFunc("/api/markers", h.handleMarkers)
+	h.apiMux.HandleFunc("/api/glitches", h.handleGlitches)
+	h.apiMux.HandleFunc("/api/glitches/{glitch_id}", h.handleGlitch)
+	h.apiMux.HandleFunc("/api/requests/{request_id}", h.handleRequest)
+	h.apiMux.HandleFunc("/api/requests/{request_id}/windows", h.handleRequestWindows)
+	h.apiMux.HandleFunc("/api/requests/{request_id}/chunks", h.handleRequestChunks)
+	h.static = http.FileServerFS(staticFS{})
 }
 
 func (h apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.mux.ServeHTTP(w, r)
+	if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
+		h.apiMux.ServeHTTP(w, r)
+	} else {
+		h.static.ServeHTTP(w, r)
+	}
 }
 
 func (h apiHandler) handleStats(w http.ResponseWriter, r *http.Request) {

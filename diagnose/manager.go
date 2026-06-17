@@ -117,8 +117,6 @@ func (m *diagnosticManager) Shutdown(ctx context.Context) error {
 	return m.store.Close(ctx)
 }
 
-func (m *diagnosticManager) Enabled() bool { return true }
-
 func (m *diagnosticManager) SessionID() string { return m.sessionID }
 
 func (m *diagnosticManager) Now() TimePoint {

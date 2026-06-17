@@ -28,7 +28,6 @@ type Manager interface {
 	Start(ctx context.Context) error
 	Shutdown(ctx context.Context) error
 
-	Enabled() bool
 	SessionID() string
 	Now() TimePoint
 

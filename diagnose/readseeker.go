@@ -35,7 +35,7 @@ func WrapReadSeeker(ctx context.Context, r io.ReadSeeker, opts ReadSeekerOptions
 // WrapReadSeekerForRequest records read-side chunk diagnostics for callers that
 // still manage RequestRef explicitly.
 func WrapReadSeekerForRequest(m Manager, req RequestRef, r io.ReadSeeker, opts ReadSeekerOptions) io.ReadSeeker {
-	if r == nil || m == nil || !m.Enabled() || req.IsZero() || !chunkLoggingEnabled(m) {
+	if r == nil || m == nil || req.IsZero() || !chunkLoggingEnabled(m) {
 		return r
 	}
 	nextSeq := &atomic.Int64{}

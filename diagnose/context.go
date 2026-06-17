@@ -36,7 +36,7 @@ func BeginHTTP(ctx context.Context, m Manager, r *http.Request, opts RequestOpti
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if m == nil || !m.Enabled() {
+	if m == nil {
 		return ctx, RequestRef{}, nil
 	}
 
@@ -105,7 +105,7 @@ func requestContextFromContext(ctx context.Context) (*requestContext, bool) {
 }
 
 func chunkLoggingEnabled(m Manager) bool {
-	if m == nil || !m.Enabled() {
+	if m == nil {
 		return false
 	}
 	if concrete, ok := m.(*diagnosticManager); ok {

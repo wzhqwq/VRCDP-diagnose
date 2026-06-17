@@ -94,21 +94,12 @@ export function timelineDomain(timeline: TimelineSummary | null, fallbackRange?:
   if (fallbackRange) return fallbackRange
   if (!timeline) return { from: 0, to: NS_PER_SEC }
 
-  const values: number[] = []
-  for (const request of timeline.requests) {
-    values.push(requestStartNs(request), requestEndNs(request))
-  }
-  for (const window of timeline.windows) {
-    values.push(window.window_start_ns, window.window_end_ns)
-  }
-  for (const marker of timeline.markers) {
-    const ns = marker.marker.time?.process_uptime_ns
-    if (ns) values.push(ns)
-  }
-  for (const glitch of timeline.glitches) {
-    const ns = glitch.glitch.time?.process_uptime_ns
-    if (ns) values.push(ns)
-  }
+  const values = [
+      ...(timeline.requests ?? []).flatMap(request => [requestStartNs(request), requestEndNs(request)]),
+      ...(timeline.windows ?? []).flatMap(win => [win.window_start_ns, win.window_end_ns]),
+      ...(timeline.markers ?? []).map(marker => marker.marker.time?.process_uptime_ns).filter(n => typeof n === 'number'),
+      ...(timeline.glitches ?? []).map(glitch => glitch.glitch.time?.process_uptime_ns).filter(n => typeof n === 'number'),
+  ]
 
   const positive = values.filter((value) => Number.isFinite(value) && value > 0)
   if (positive.length === 0) return { from: 0, to: NS_PER_SEC }
@@ -159,11 +150,11 @@ export function buildRecordingSegments(
   videoDurationSec: number,
 ): RecordingSegment[] {
   if (!timeline || !startMarkerID) return []
-  const startMarker = timeline.markers.find((marker) => marker.marker_id === startMarkerID)
+  const startMarker = timeline.markers?.find((marker) => marker.marker_id === startMarkerID)
   const startNs = startMarker ? markerTimeNs(startMarker) : 0
   if (startNs <= 0) return []
 
-  const events = timeline.markers
+  const events = (timeline.markers ?? [])
     .filter((marker) => {
       const ns = markerTimeNs(marker)
       return ns >= startNs && marker.marker.source === 'obs-websocket'
@@ -279,8 +270,8 @@ export function summarizeRange(timeline: TimelineSummary | null, range: RangeNs 
     }
   }
 
-  const windows = windowsInRange(timeline.windows, range)
-  const requests = requestsInRange(timeline.requests, range)
+  const windows = windowsInRange(timeline.windows ?? [], range)
+  const requests = requestsInRange(timeline.requests ?? [], range)
   const allowances = windows.flatMap((window) => [window.min_allowance, window.max_allowance])
 
   return {
@@ -290,8 +281,8 @@ export function summarizeRange(timeline: TimelineSummary | null, range: RangeNs 
       const start = requestStartNs(request)
       return start >= range.from && start <= range.to
     }).length,
-    markerCount: markersInRange(timeline.markers, range).length,
-    glitchCount: glitchesInRange(timeline.glitches, range).length,
+    markerCount: markersInRange(timeline.markers ?? [], range).length,
+    glitchCount: glitchesInRange(timeline.glitches ?? [], range).length,
     maxMbps: Math.max(0, ...windows.map((window) => window.effective_mbps)),
     maxReadMs: Math.max(0, ...windows.map((window) => window.max_read_duration_ns / NS_PER_MS)),
     maxFlushMs: Math.max(0, ...windows.map((window) => window.max_flush_duration_ns / NS_PER_MS)),

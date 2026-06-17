@@ -57,7 +57,7 @@
   function renderChart() {
     if (!svgElement || !timeline) return
 
-    const lanes = buildResourceLanes(timeline.requests)
+    const lanes = buildResourceLanes(timeline.requests ?? [])
     const domain = timelineDomain(timeline, zoom ? selectedRange : null)
     const margin = { top: 18, right: 20, bottom: zoom ? 38 : 58, left: 150 }
     const laneHeight = 28
@@ -153,7 +153,7 @@
 
     const markerY1 = margin.top
     const markerY2 = metricTop + metricHeight
-    for (const marker of timeline.markers) {
+    for (const marker of timeline.markers ?? []) {
       const ns = marker.marker.time?.process_uptime_ns ?? 0
       if (ns < domain.from || ns > domain.to) continue
       const line = svg.append('g').attr('class', 'marker')
@@ -175,7 +175,7 @@
         .text(marker.marker.label)
     }
 
-    for (const glitch of timeline.glitches) {
+    for (const glitch of timeline.glitches ?? []) {
       const ns = glitch.glitch.time?.process_uptime_ns ?? 0
       if (ns < domain.from || ns > domain.to) continue
       const group = svg.append('g').attr('class', 'glitch')
@@ -231,7 +231,7 @@
     margin: { top: number; right: number; bottom: number; left: number },
   ) {
     if (!timeline) return
-    const metrics = timeline.windows
+    const metrics = timeline.windows ?? []
     const maxMbps = Math.max(1, d3.max(metrics, (metric) => metric.effective_mbps) ?? 1)
     const y = d3.scaleLinear().domain([0, maxMbps]).range([metricTop + metricHeight, metricTop])
 

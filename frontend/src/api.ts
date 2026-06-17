@@ -118,10 +118,10 @@ export interface GlitchSummary {
 
 export interface TimelineSummary {
   session_id: string
-  requests: RequestSummary[]
-  windows: WindowMetric[]
-  markers: MarkerSummary[]
-  glitches: GlitchSummary[]
+  requests: RequestSummary[] | null
+  windows: WindowMetric[] | null
+  markers: MarkerSummary[] | null
+  glitches: GlitchSummary[] | null
 }
 
 export interface TimelineQuery {

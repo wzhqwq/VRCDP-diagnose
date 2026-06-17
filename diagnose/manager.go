@@ -119,6 +119,8 @@ func (m *diagnosticManager) Shutdown(ctx context.Context) error {
 
 func (m *diagnosticManager) SessionID() string { return m.sessionID }
 
+func (m *diagnosticManager) Started() bool { return m.started }
+
 func (m *diagnosticManager) Now() TimePoint {
 	now := time.Now()
 	return TimePoint{

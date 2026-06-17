@@ -29,6 +29,7 @@ type Manager interface {
 	Shutdown(ctx context.Context) error
 
 	SessionID() string
+	Started() bool
 	Now() TimePoint
 
 	HTTPHandler() http.Handler

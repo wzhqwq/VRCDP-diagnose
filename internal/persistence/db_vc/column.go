@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/wzhqwq/VRCDancePreloader/utils"
+	"github.com/wzhqwq/VRCDancePreloader/internal/utils"
 )
 
 type DeprecatedColumn[T any] struct {

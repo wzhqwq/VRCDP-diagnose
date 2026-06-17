@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/samber/lo"
-	"github.com/wzhqwq/VRCDancePreloader/utils"
+	"github.com/wzhqwq/VRCDancePreloader/internal/utils"
 )
 
 var tableNames = map[string]struct{}{}

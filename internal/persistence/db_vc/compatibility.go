@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/wzhqwq/VRCDancePreloader/utils"
+	"github.com/wzhqwq/VRCDancePreloader/internal/utils"
 )
 
 var compatibilityTable = DefTable("compatibility").DefColumns(

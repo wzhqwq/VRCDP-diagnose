@@ -1,6 +1,6 @@
 package diagnose
 
-import "github.com/wzhqwq/VRCDancePreloader/db_vc"
+import "github.com/wzhqwq/VRCDancePreloader/internal/persistence/db_vc"
 
 var (
 	sessionsTable = db_vc.DefTable("diagnose_sessions").DefColumns(

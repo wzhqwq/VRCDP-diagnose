@@ -4,12 +4,12 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/wzhqwq/VRCDancePreloader/utils"
+	utils2 "github.com/wzhqwq/VRCDancePreloader/internal/utils"
 )
 
-var logger = utils.NewLogger("DB VerCtrl")
+var logger = utils2.NewLogger("DB VerCtrl")
 
-func Init(db *sql.DB, dataVersion utils.ShortVersion, tables ...*Table) {
+func Init(db *sql.DB, dataVersion utils2.ShortVersion, tables ...*Table) {
 	getTableNames(db)
 	currentDataVersion = dataVersion
 

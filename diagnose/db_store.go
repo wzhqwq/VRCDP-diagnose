@@ -9,7 +9,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/wzhqwq/VRCDancePreloader/db_vc"
+	"github.com/wzhqwq/VRCDancePreloader/internal/persistence/db_vc"
 )
 
 var ErrStoreNotInitialized = errors.New("diagnose database is not initialized; call db_vc.Init(db, dataVersion, diagnose.Tables...) before using an enabled diagnose.Manager")

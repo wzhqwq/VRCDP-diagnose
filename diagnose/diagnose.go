@@ -122,7 +122,6 @@ type RequestStart struct {
 type RequestEnd struct {
 	Time TimePoint `json:"time"`
 
-	ResponseStatus int   `json:"response_status"`
 	TotalBytesSent int64 `json:"total_bytes_sent"`
 	DurationNs     int64 `json:"duration_ns"`
 

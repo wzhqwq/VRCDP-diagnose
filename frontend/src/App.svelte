@@ -607,7 +607,7 @@
                 </div>
                 <div>
                   <dt>Status</dt>
-                  <dd>{selectedRequest.end?.response_status ?? selectedRequest.start.response_status}</dd>
+                  <dd>{selectedRequest.start.response_status}</dd>
                 </div>
               </dl>
             {:else}

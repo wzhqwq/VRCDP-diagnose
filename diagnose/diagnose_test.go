@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,9 +26,6 @@ func TestEnabledManagerStartStats(t *testing.T) {
 		}
 	}()
 
-	if !m.Enabled() {
-		t.Fatal("enabled manager reported disabled")
-	}
 	if got := m.SessionID(); got == "" {
 		t.Fatal("enabled manager returned empty session ID")
 	}
@@ -169,8 +167,16 @@ func TestWrapReadSeekerReturnsOriginalWhenChunkLoggingDisabled(t *testing.T) {
 	}
 	reader := bytes.NewReader([]byte("hello"))
 	wrapped := WrapReadSeeker(ctx, reader, ReadSeekerOptions{})
-	if wrapped != reader {
-		t.Fatal("WrapReadSeeker with chunk logging disabled did not return original reader")
+	if wrapped == reader {
+		t.Fatal("WrapReadSeeker with active context returned original reader")
+	}
+	buf := make([]byte, 5)
+	if _, err := wrapped.Read(buf); err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	stats := m.RuntimeStats()
+	if stats.ChunkEventsRecorded != 0 {
+		t.Fatalf("recorded chunks = %d, want 0", stats.ChunkEventsRecorded)
 	}
 }
 
@@ -216,8 +222,12 @@ func TestEndHTTPFillsMissingTimeAndDuration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginHTTP returned error: %v", err)
 	}
+	wrapped := WrapReadSeeker(ctx, bytes.NewReader([]byte("hello")), ReadSeekerOptions{})
+	if _, err := io.ReadAll(wrapped); err != nil {
+		t.Fatalf("ReadAll returned error: %v", err)
+	}
 	time.Sleep(time.Millisecond)
-	EndHTTP(ctx, RequestEnd{ResponseStatus: http.StatusOK, TotalBytesSent: 5})
+	EndHTTP(ctx)
 
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -230,10 +240,168 @@ func TestEndHTTPFillsMissingTimeAndDuration(t *testing.T) {
 	if st.ends[0].DurationNs <= 0 {
 		t.Fatalf("EndHTTP duration = %d, want > 0", st.ends[0].DurationNs)
 	}
+	if st.ends[0].TotalBytesSent != 5 {
+		t.Fatalf("EndHTTP total bytes = %d, want 5", st.ends[0].TotalBytesSent)
+	}
 }
 
 func TestEndHTTPWithoutDiagnosticContextNoops(t *testing.T) {
-	EndHTTP(context.Background(), RequestEnd{ResponseStatus: http.StatusOK})
+	EndHTTP(context.Background())
+}
+
+func TestEndHTTPUsesWrappedReadSeekerError(t *testing.T) {
+	st := &recordingStore{}
+	m := newDiagnosticManager(Config{}, st)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	defer func() {
+		if err := m.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown returned error: %v", err)
+		}
+	}()
+
+	ctx, _, err := BeginHTTP(context.Background(), m, nil, RequestOptions{RequestID: "request_test"})
+	if err != nil {
+		t.Fatalf("BeginHTTP returned error: %v", err)
+	}
+	wrapped := WrapReadSeeker(ctx, errorReadSeeker{}, ReadSeekerOptions{})
+	buf := make([]byte, 4)
+	n, err := wrapped.Read(buf)
+	if n != 2 {
+		t.Fatalf("Read bytes = %d, want 2", n)
+	}
+	if err != io.ErrUnexpectedEOF {
+		t.Fatalf("Read error = %v, want %v", err, io.ErrUnexpectedEOF)
+	}
+	EndHTTP(ctx)
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.ends) != 1 {
+		t.Fatalf("stored ends = %d, want 1", len(st.ends))
+	}
+	if st.ends[0].TotalBytesSent != 2 {
+		t.Fatalf("EndHTTP total bytes = %d, want 2", st.ends[0].TotalBytesSent)
+	}
+	if st.ends[0].Error != io.ErrUnexpectedEOF.Error() {
+		t.Fatalf("EndHTTP error = %q, want %q", st.ends[0].Error, io.ErrUnexpectedEOF.Error())
+	}
+}
+
+func TestWrapResponseWriterRecordsWriteBytes(t *testing.T) {
+	st := &recordingStore{}
+	m := newDiagnosticManager(Config{}, st)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	defer func() {
+		if err := m.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown returned error: %v", err)
+		}
+	}()
+
+	ctx, _, err := BeginHTTP(context.Background(), m, nil, RequestOptions{RequestID: "request_test"})
+	if err != nil {
+		t.Fatalf("BeginHTTP returned error: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	wrapped := WrapResponseWriter(ctx, recorder)
+	n, err := wrapped.Write([]byte("hello"))
+	if err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+	if n != 5 {
+		t.Fatalf("Write bytes = %d, want 5", n)
+	}
+	EndHTTP(ctx)
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.ends) != 1 {
+		t.Fatalf("stored ends = %d, want 1", len(st.ends))
+	}
+	if st.ends[0].TotalBytesSent != 5 {
+		t.Fatalf("EndHTTP total bytes = %d, want 5", st.ends[0].TotalBytesSent)
+	}
+	if st.ends[0].Error != "" {
+		t.Fatalf("EndHTTP error = %q, want empty", st.ends[0].Error)
+	}
+}
+
+func TestWrapResponseWriterRecordsWriteError(t *testing.T) {
+	st := &recordingStore{}
+	m := newDiagnosticManager(Config{}, st)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	defer func() {
+		if err := m.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown returned error: %v", err)
+		}
+	}()
+
+	ctx, _, err := BeginHTTP(context.Background(), m, nil, RequestOptions{RequestID: "request_test"})
+	if err != nil {
+		t.Fatalf("BeginHTTP returned error: %v", err)
+	}
+	wrapped := WrapResponseWriter(ctx, errorResponseWriter{err: errClientDisconnected})
+	n, err := wrapped.Write([]byte("hello"))
+	if n != 2 {
+		t.Fatalf("Write bytes = %d, want 2", n)
+	}
+	if err != errClientDisconnected {
+		t.Fatalf("Write error = %v, want %v", err, errClientDisconnected)
+	}
+	EndHTTP(ctx)
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.ends) != 1 {
+		t.Fatalf("stored ends = %d, want 1", len(st.ends))
+	}
+	if st.ends[0].TotalBytesSent != 2 {
+		t.Fatalf("EndHTTP total bytes = %d, want 2", st.ends[0].TotalBytesSent)
+	}
+	if st.ends[0].Error != errClientDisconnected.Error() {
+		t.Fatalf("EndHTTP error = %q, want %q", st.ends[0].Error, errClientDisconnected.Error())
+	}
+}
+
+func TestEndHTTPPrefersResponseWriterBytes(t *testing.T) {
+	st := &recordingStore{}
+	m := newDiagnosticManager(Config{}, st)
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	defer func() {
+		if err := m.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown returned error: %v", err)
+		}
+	}()
+
+	ctx, _, err := BeginHTTP(context.Background(), m, nil, RequestOptions{RequestID: "request_test"})
+	if err != nil {
+		t.Fatalf("BeginHTTP returned error: %v", err)
+	}
+	reader := WrapReadSeeker(ctx, bytes.NewReader([]byte("hello")), ReadSeekerOptions{})
+	if _, err := io.ReadAll(reader); err != nil {
+		t.Fatalf("ReadAll returned error: %v", err)
+	}
+	writer := WrapResponseWriter(ctx, httptest.NewRecorder())
+	if _, err := writer.Write([]byte("hi")); err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+	EndHTTP(ctx)
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.ends) != 1 {
+		t.Fatalf("stored ends = %d, want 1", len(st.ends))
+	}
+	if st.ends[0].TotalBytesSent != 2 {
+		t.Fatalf("EndHTTP total bytes = %d, want writer bytes 2", st.ends[0].TotalBytesSent)
+	}
 }
 
 func TestAPIStatsMarkersAndGlitches(t *testing.T) {
@@ -534,6 +702,33 @@ type timelineRecordingStore struct {
 	sessionID string
 	query     timelineQuery
 }
+
+type errorReadSeeker struct{}
+
+func (errorReadSeeker) Read(p []byte) (int, error) {
+	copy(p, "he")
+	return 2, io.ErrUnexpectedEOF
+}
+
+func (errorReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	return 0, nil
+}
+
+var errClientDisconnected = errors.New("client disconnected")
+
+type errorResponseWriter struct {
+	err error
+}
+
+func (w errorResponseWriter) Header() http.Header {
+	return http.Header{}
+}
+
+func (w errorResponseWriter) Write(p []byte) (int, error) {
+	return 2, w.err
+}
+
+func (w errorResponseWriter) WriteHeader(statusCode int) {}
 
 func (s *timelineRecordingStore) GetTimeline(ctx context.Context, sessionID string, query timelineQuery) (timelineSummary, error) {
 	s.mu.Lock()

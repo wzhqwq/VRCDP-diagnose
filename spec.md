@@ -257,7 +257,6 @@ HTTPProto, TLS, and ALPN must be visible in the UI because protocol behavior may
 type RequestEnd struct {
 	Time TimePoint `json:"time"`
 
-	ResponseStatus  int   `json:"response_status"`
 	TotalBytesSent int64 `json:"total_bytes_sent"`
 	DurationNs     int64 `json:"duration_ns"`
 
@@ -477,9 +476,10 @@ type ReadSeekerOptions struct {
 
 func BeginHTTP(ctx context.Context, m Manager, r *http.Request, opts RequestOptions) (context.Context, RequestRef, error)
 func RequestRefFromContext(ctx context.Context) (RequestRef, bool)
-func EndHTTP(ctx context.Context, end RequestEnd)
+func EndHTTP(ctx context.Context)
 
 func WrapReadSeeker(ctx context.Context, r io.ReadSeeker, opts ReadSeekerOptions) io.ReadSeeker
+func WrapResponseWriter(ctx context.Context, w http.ResponseWriter) http.ResponseWriter
 func WrapReadSeekerForRequest(m Manager, req RequestRef, r io.ReadSeeker, opts ReadSeekerOptions) io.ReadSeeker
 ```
 
@@ -487,11 +487,15 @@ Expected behavior:
 
 ```text
 BeginHTTP builds RequestStart metadata from the HTTP request, stores RequestRef in context, and honors provided request/resource IDs.
-EndHTTP explicitly ends the request; missing time and duration are filled by the manager.
-WrapReadSeeker returns the original reader when context has no active diagnostic request, chunk logging is disabled, or reader is nil.
+EndHTTP explicitly ends the request; time and duration are filled by the manager.
+EndHTTP fills TotalBytesSent and Error from the associated WrapResponseWriter, when one is used.
+EndHTTP falls back to TotalBytesSent and Error from the associated WrapReadSeeker when no response writer wrapper is used.
+WrapReadSeeker returns the original reader when context has no active diagnostic request or reader is nil.
+WrapResponseWriter returns the original writer when context has no active diagnostic request or writer is nil.
 Preserve io.ReadSeeker behavior for http.ServeContent.
-Record one ChunkEvent per successful Read.
+Record one ChunkEvent per successful Read when chunk logging is enabled.
 Record read timing and read byte counts.
+Record writer-side byte counts and write errors, including unexpected client disconnects surfaced by ResponseWriter.Write.
 Use read bytes as WriteBytes proxy because ServeContent owns the socket write/flush loop.
 Leave write and flush timing fields zero because they are not observable from a ReadSeeker wrapper.
 WrapReadSeekerForRequest is a lower-level compatibility helper for callers that already manage RequestRef explicitly.

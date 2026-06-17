@@ -123,31 +123,28 @@ if err != nil {
 }
 ```
 
-When the request finishes, explicitly call `EndHTTP`. Missing time and duration are filled automatically.
+When the request finishes, explicitly call `EndHTTP`. Time and duration are filled automatically. Total bytes and transfer errors are filled from `WrapResponseWriter` when it is used, otherwise from `WrapReadSeeker`.
 
 ```go
 defer func() {
-	diagnose.EndHTTP(diagCtx, diagnose.RequestEnd{
-		ResponseStatus: status,
-		TotalBytesSent: totalBytesSent,
-		Error:          errText,
-	})
+	diagnose.EndHTTP(diagCtx)
 }()
 ```
 
 ## 5. ReadSeeker Instrumentation For ServeContent
 
-If the main project serves cached files by wrapping an `io.ReadSeeker` with `utils.PacingReader` and passing it to `http.ServeContent`, wrap the final reader with `diagnose.WrapReadSeeker` using the context returned by `BeginHTTP`.
+If the main project serves cached files by wrapping an `io.ReadSeeker` with `utils.PacingReader` and passing it to `http.ServeContent`, wrap the final reader with `diagnose.WrapReadSeeker` and wrap the response writer with `diagnose.WrapResponseWriter` using the context returned by `BeginHTTP`.
 
 ```go
 cached := openCachedReadSeeker(resourceID)
 paced := utils.NewPacingReader(cached, targetMbps)
 observed := diagnose.WrapReadSeeker(diagCtx, paced, diagnose.ReadSeekerOptions{})
+observedWriter := diagnose.WrapResponseWriter(diagCtx, w)
 
-http.ServeContent(w, r, filename, modTime, observed)
+http.ServeContent(observedWriter, r, filename, modTime, observed)
 ```
 
-`WrapReadSeeker` preserves `io.ReadSeeker`. It records read timing and read byte counts as chunk events. Because `http.ServeContent` owns the socket copy loop, this wrapper cannot observe actual response write or flush timings; for window metrics it uses read bytes as the transfer-byte proxy.
+`WrapReadSeeker` preserves `io.ReadSeeker`. It records total read bytes and read errors for `EndHTTP`, and when chunk logging is enabled it records read timing and read byte counts as chunk events. `WrapResponseWriter` records write bytes and write errors, including client disconnect errors returned by the server write path. Because `http.ServeContent` owns the socket copy loop, the reader wrapper cannot observe actual response write or flush timings; for window metrics it uses read bytes as the transfer-byte proxy.
 
 If you already have a sequence offset for a resumed instrumentation stream, pass it through `ReadSeekerOptions.StartingSeq`.
 

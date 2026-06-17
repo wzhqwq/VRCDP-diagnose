@@ -49,7 +49,7 @@ var upsertPacingProfile = pacingProfilesTable.InsertOrReplace(pacingProfileColum
 var insertRequest = requestsTable.InsertOrReplace(requestColumns...).Build()
 var endRequest = requestsTable.Update().Set(
 	"end_process_uptime_ns = ?", "end_json = ?", "incomplete = ?",
-	"response_status = ?", "total_bytes_sent = ?", "duration_ns = ?", "error = ?",
+	"total_bytes_sent = ?", "duration_ns = ?", "error = ?",
 ).Where("request_id = ?").Build()
 var insertChunk = chunkEventsTable.InsertOrReplace(chunkEventColumns...).Build()
 var upsertWindow = windowMetricsTable.Insert(windowMetricColumns...).Build() + `
@@ -193,7 +193,6 @@ func (s *dbVCStore) EndRequest(ctx context.Context, ref RequestRef, end RequestE
 		end.Time.ProcessUptimeNs,
 		endJSON,
 		0,
-		end.ResponseStatus,
 		end.TotalBytesSent,
 		end.DurationNs,
 		end.Error,

@@ -57,7 +57,6 @@ export interface RequestStart {
 
 export interface RequestEnd {
   time: TimePoint
-  response_status: number
   total_bytes_sent: number
   duration_ns: number
   error?: string

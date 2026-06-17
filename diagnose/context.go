@@ -3,6 +3,7 @@ package diagnose
 import (
 	"context"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -26,8 +27,13 @@ type requestContext struct {
 	started time.Time
 	opts    RequestOptions
 
-	nextSeq    atomic.Int64
-	cumulative atomic.Int64
+	nextSeq         atomic.Int64
+	readCumulative  atomic.Int64
+	writeCumulative atomic.Int64
+	writerObserved  atomic.Bool
+
+	endMu    sync.Mutex
+	endError string
 }
 
 // BeginHTTP starts diagnostics for an HTTP request and stores the diagnostic
@@ -80,20 +86,46 @@ func RequestRefFromContext(ctx context.Context) (RequestRef, bool) {
 	return payload.ref, true
 }
 
-// EndHTTP completes a request started by BeginHTTP. Missing Time and DurationNs
-// fields are filled from the manager clock and request start time.
-func EndHTTP(ctx context.Context, end RequestEnd) {
+// EndHTTP completes a request started by BeginHTTP. Time and DurationNs are
+// filled from the manager clock and request start time. TotalBytesSent and
+// Error are filled from the associated WrapResponseWriter, when one is used,
+// otherwise from the associated WrapReadSeeker.
+func EndHTTP(ctx context.Context) {
 	payload, ok := requestContextFromContext(ctx)
 	if !ok || payload.manager == nil || payload.ref.IsZero() {
 		return
 	}
-	if isZeroTimePoint(end.Time) {
-		end.Time = payload.manager.Now()
+	totalBytesSent := payload.readCumulative.Load()
+	if payload.writerObserved.Load() {
+		totalBytesSent = payload.writeCumulative.Load()
 	}
-	if end.DurationNs == 0 && !payload.started.IsZero() {
+	end := RequestEnd{
+		Time:           payload.manager.Now(),
+		TotalBytesSent: totalBytesSent,
+		Error:          payload.endErrorText(),
+	}
+	if !payload.started.IsZero() {
 		end.DurationNs = time.Since(payload.started).Nanoseconds()
 	}
 	payload.manager.EndRequest(payload.ref, end)
+}
+
+func (r *requestContext) recordEndError(err error) {
+	msg := diagnosticErrorString(err)
+	if msg == "" {
+		return
+	}
+	r.endMu.Lock()
+	defer r.endMu.Unlock()
+	if r.endError == "" {
+		r.endError = msg
+	}
+}
+
+func (r *requestContext) endErrorText() string {
+	r.endMu.Lock()
+	defer r.endMu.Unlock()
+	return r.endError
 }
 
 func requestContextFromContext(ctx context.Context) (*requestContext, bool) {

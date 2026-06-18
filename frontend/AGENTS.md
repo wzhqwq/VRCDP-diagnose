@@ -65,6 +65,7 @@ Use this before adding or changing icon imports. Search by concrete names or int
 
 # Current Frontend Direction
 
+- Follow the reusable Svelte coding style guide in [`../SVELTE_CODING_STYLE.md`](../SVELTE_CODING_STYLE.md) for frontend code organization, Svelte 5 state patterns, component structure, and TypeScript conventions.
 - Build a quiet operational diagnostics interface, not a marketing landing page.
 - Prioritize dense, scannable views for sessions, requests, chunk events, pacing windows, markers, and glitches.
 - Keep the initial visual system restrained: neutral surfaces, crisp borders, small status treatments, and clear data hierarchy.

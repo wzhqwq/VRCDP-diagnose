@@ -1,36 +1,38 @@
 <script lang="ts">
   import * as d3 from 'd3'
-  import type { RequestSummary, TimelineSummary, WindowMetric } from './api'
-  import {
-    buildResourceLanes,
-    formatProcessTime,
-    requestEndNs,
-    requestStartNs,
-    timelineDomain,
-    type RangeNs,
-  } from './timelineData'
+  import type { WindowMetric } from './api'
+  import { buildResourceLanes, type RangeNs, requestEndNs, requestStartNs, timelineDomain, } from './timelineData'
+  import { getSessionContext } from "./data/session-state.svelte"
+  import { formatProcessTime } from "./utils/format"
 
   interface Props {
-    timeline: TimelineSummary | null
-    selectedRange?: RangeNs | null
     zoom?: boolean
     height?: number
-    selectedRequestId?: string | null
-    playbackCursorNs?: number | null
-    onRangeChange?: (range: RangeNs | null) => void
-    onSelectRequest?: (request: RequestSummary) => void
   }
 
-  let {
-    timeline,
-    selectedRange = null,
+  const {
+    state: sessionState,
+    timeline: {
+      state: timelineState,
+      setRange,
+    },
+    video: {
+      playbackCursorNs,
+    },
+    selectRequest
+  } = getSessionContext()
+
+  const {
     zoom = false,
     height = 360,
-    selectedRequestId = null,
-    playbackCursorNs = null,
-    onRangeChange,
-    onSelectRequest,
   }: Props = $props()
+
+  const selectedRequestId = $derived(sessionState.selectedRequestId)
+  const fullTimeline = $derived(timelineState.data)
+  const zoomTimeline = $derived(timelineState.zoomTimeline)
+  const selectedRange = $derived(timelineState.selectedRange)
+
+  const timeline = $derived(zoom ? (zoomTimeline ?? fullTimeline) : fullTimeline)
 
   let svgElement = $state<SVGSVGElement | undefined>(undefined)
   let width = $state(0)
@@ -147,7 +149,7 @@
       .attr('tabindex', 0)
       .attr('role', 'button')
       .attr('aria-label', ({ request }) => `Select request ${request.request_id}`)
-      .on('click', (_event: MouseEvent, { request }) => onSelectRequest?.(request))
+      .on('click', (_event: MouseEvent, { request }) => selectRequest(request))
       .append('title')
       .text(({ request }) => `${request.request_id}\n${request.start.url_path}\n${request.start.pacing_profile_name || 'profile unknown'}`)
 
@@ -322,11 +324,11 @@
       .on('end', (event: d3.D3BrushEvent<unknown>) => {
         if (restoringSelection) return
         if (!event.selection) {
-          onRangeChange?.(null)
+          setRange(null)
           return
         }
         const [x0, x1] = event.selection as [number, number]
-        onRangeChange?.({
+        setRange({
           from: Math.max(domain.from, x.invert(x0)),
           to: Math.min(domain.to, x.invert(x1)),
         })
@@ -349,7 +351,7 @@
   }
 </script>
 
-<div class="timeline-host" bind:clientWidth={width}>
+<div bind:clientWidth={width} class="timeline-host">
   {#if timeline}
     <svg use:chartSvg class="timeline-svg" aria-label={zoom ? 'Zoomed session timeline' : 'Session timeline'}></svg>
   {:else}

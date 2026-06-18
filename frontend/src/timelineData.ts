@@ -1,10 +1,5 @@
-import type {
-  GlitchSummary,
-  MarkerSummary,
-  RequestSummary,
-  TimelineSummary,
-  WindowMetric,
-} from './api'
+import type { GlitchSummary, MarkerSummary, RequestSummary, TimelineSummary, WindowMetric, } from './api'
+import { NS_PER_MS, NS_PER_SEC } from "./constants/units"
 
 export interface RangeNs {
   from: number
@@ -41,9 +36,6 @@ export interface RecordingSegment {
   videoStartSec: number
   videoEndSec: number
 }
-
-export const NS_PER_MS = 1_000_000
-export const NS_PER_SEC = 1_000_000_000
 
 export function requestStartNs(request: RequestSummary): number {
   return request.start.time?.process_uptime_ns ?? 0
@@ -95,10 +87,10 @@ export function timelineDomain(timeline: TimelineSummary | null, fallbackRange?:
   if (!timeline) return { from: 0, to: NS_PER_SEC }
 
   const values = [
-      ...(timeline.requests ?? []).flatMap(request => [requestStartNs(request), requestEndNs(request)]),
-      ...(timeline.windows ?? []).flatMap(win => [win.window_start_ns, win.window_end_ns]),
-      ...(timeline.markers ?? []).map(marker => marker.marker.time?.process_uptime_ns).filter(n => typeof n === 'number'),
-      ...(timeline.glitches ?? []).map(glitch => glitch.glitch.time?.process_uptime_ns).filter(n => typeof n === 'number'),
+    ...(timeline.requests ?? []).flatMap(request => [requestStartNs(request), requestEndNs(request)]),
+    ...(timeline.windows ?? []).flatMap(win => [win.window_start_ns, win.window_end_ns]),
+    ...(timeline.markers ?? []).map(marker => marker.marker.time?.process_uptime_ns).filter(n => typeof n === 'number'),
+    ...(timeline.glitches ?? []).map(glitch => glitch.glitch.time?.process_uptime_ns).filter(n => typeof n === 'number'),
   ]
 
   const positive = values.filter((value) => Number.isFinite(value) && value > 0)
@@ -294,21 +286,3 @@ export function summarizeRange(timeline: TimelineSummary | null, range: RangeNs 
   }
 }
 
-export function formatDuration(ns: number): string {
-  const seconds = ns / NS_PER_SEC
-  if (seconds < 1) return `${(ns / NS_PER_MS).toFixed(0)} ms`
-  if (seconds < 60) return `${seconds.toFixed(2)} s`
-  const minutes = Math.floor(seconds / 60)
-  return `${minutes}m ${(seconds % 60).toFixed(0)}s`
-}
-
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
-
-export function formatProcessTime(ns: number): string {
-  return `${(ns / NS_PER_SEC).toFixed(3)}s`
-}

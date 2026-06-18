@@ -1,0 +1,73 @@
+<script lang="ts">
+  import { formatProcessTime } from "../utils/format"
+  import TimelineChart from "../TimelineChart.svelte"
+  import { summarizeRange } from "../timelineData"
+  import { getSessionContext } from "../data/session-state.svelte"
+
+  const {
+    state: sessionState,
+    timeline: {
+      state: timelineState,
+    }
+  } = getSessionContext()
+
+  const session = $derived(sessionState.session)
+  const timeline = $derived(timelineState.data)
+  const zoomTimeline = $derived(timelineState.zoomTimeline)
+  const selectedRange = $derived(timelineState.selectedRange)
+
+  const detailTimeline = $derived(zoomTimeline ?? timeline)
+  const rangeSummary = $derived(summarizeRange(detailTimeline, selectedRange, (session?.chunk_events_dropped ?? 0) > 0))
+
+</script>
+<article aria-labelledby="zoom-title" class="zoom-panel">
+  <div class="panel-title-row">
+    <div>
+      <h3 id="zoom-title">Zoomed range</h3>
+      <p>
+        {#if selectedRange}
+          {formatProcessTime(selectedRange.from)} to {formatProcessTime(selectedRange.to)}
+        {:else}
+          Select a range on the main timeline
+        {/if}
+      </p>
+    </div>
+  </div>
+  <TimelineChart height={300} zoom/>
+  <dl class="range-facts">
+    <div>
+      <dt>Duration</dt>
+      <dd>{rangeSummary.durationMs.toFixed(0)} ms</dd>
+    </div>
+    <div>
+      <dt>Requests</dt>
+      <dd>{rangeSummary.requestCount} total, {rangeSummary.restartCount} starts</dd>
+    </div>
+    <div>
+      <dt>Events</dt>
+      <dd>{rangeSummary.markerCount} markers, {rangeSummary.glitchCount} glitches</dd>
+    </div>
+    <div>
+      <dt>Max Mbps</dt>
+      <dd>{rangeSummary.maxMbps.toFixed(1)}</dd>
+    </div>
+    <div>
+      <dt>Read / flush</dt>
+      <dd>{rangeSummary.maxReadMs.toFixed(2)} / {rangeSummary.maxFlushMs.toFixed(2)} ms</dd>
+    </div>
+    <div>
+      <dt>Sleep max</dt>
+      <dd>{rangeSummary.maxSleepMs.toFixed(2)} ms</dd>
+    </div>
+    <div>
+      <dt>Allowance</dt>
+      <dd>
+        {rangeSummary.minAllowance ?? 'n/a'} to {rangeSummary.maxAllowance ?? 'n/a'}
+      </dd>
+    </div>
+    <div>
+      <dt>Dropped</dt>
+      <dd>{rangeSummary.droppedChunks ? 'yes' : 'no'}</dd>
+    </div>
+  </dl>
+</article>

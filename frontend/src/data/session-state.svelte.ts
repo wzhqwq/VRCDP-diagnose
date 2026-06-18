@@ -71,7 +71,9 @@ export function createSessionState() {
     requests,
     video,
 
-    selectedRequest,
+    selectedRequest() {
+      return selectedRequest
+    },
 
     loadAll,
     switchSession,

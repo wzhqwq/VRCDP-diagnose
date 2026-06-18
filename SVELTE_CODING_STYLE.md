@@ -33,8 +33,25 @@ easy to extend.
 - Return a clear object from state factories:
   - `state` first.
   - child state modules next.
-  - derived values after state.
+  - derived value accessors after state.
   - actions last.
+- Do not return `$derived` values directly from a state factory. Returning the
+  value snapshots the current value into the returned object. Wrap derived reads
+  in closures instead:
+
+  ```ts
+  const total = $derived(items.reduce((sum, item) => sum + item.value, 0))
+
+  return {
+    state,
+    total() {
+      return total
+    },
+  }
+  ```
+
+- When consuming derived accessors from a state object, call the accessor inside
+  markup or another `$derived`, such as `const total = $derived(state.total())`.
 - Export state types with `ReturnType<typeof create...State>`.
 - Pass dependencies into state factories as functions when the dependency can
   change, such as `sessionId: () => string`.

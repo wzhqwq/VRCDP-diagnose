@@ -61,6 +61,7 @@
 
     const lanes = buildResourceLanes(timeline.requests ?? [])
     const domain = timelineDomain(timeline, zoom ? selectedRange : null)
+    const playbackCursor = playbackCursorNs()
     const margin = { top: 18, right: 20, bottom: zoom ? 38 : 58, left: 150 }
     const laneHeight = 28
     const laneGap = 8
@@ -196,8 +197,8 @@
       group.append('title').text(glitch.glitch.corruption_type || glitch.glitch.severity || 'glitch')
     }
 
-    if (playbackCursorNs !== null && playbackCursorNs >= domain.from && playbackCursorNs <= domain.to) {
-      const cursorX = x(playbackCursorNs)
+    if (playbackCursor !== null && playbackCursor >= domain.from && playbackCursor <= domain.to) {
+      const cursorX = x(playbackCursor)
       const group = svg.append('g').attr('class', 'playback-cursor')
       group
         .append('line')

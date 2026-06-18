@@ -47,9 +47,15 @@ export function createVideoState(timelineState: TimelineState) {
 
   return {
     state,
-    recordingSegments,
-    playbackCursorNs,
-    recordingStartMarkers,
+    recordingSegments() {
+      return recordingSegments
+    },
+    playbackCursorNs() {
+      return playbackCursorNs
+    },
+    recordingStartMarkers() {
+      return recordingStartMarkers
+    },
 
     unloadVideo,
     loadVideo,

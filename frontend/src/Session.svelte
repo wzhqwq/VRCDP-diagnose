@@ -39,6 +39,9 @@
   const session = $derived(sessionState.state.session)
   const loading = $derived(sessionState.state.loading)
   const selectedRange = $derived(sessionState.timeline.state.selectedRange)
+  const servedBytes = $derived(formatBytes(totalBytesServed()))
+  const maxMbpsFixed = $derived(maxMbps().toFixed(1))
+  const rangeText = $derived(`${formatProcessTime(currentDomain().from)} to ${formatProcessTime(currentDomain().to)}`)
 </script>
 
 <section aria-label="Current diagnostic session" class="session-workspace">
@@ -67,11 +70,11 @@
       </article>
       <article>
         <span>Total served</span>
-        <strong>{formatBytes(totalBytesServed)}</strong>
+        <strong>{servedBytes}</strong>
       </article>
       <article>
         <span>Max Mbps</span>
-        <strong>{maxMbps.toFixed(1)}</strong>
+        <strong>{maxMbpsFixed}</strong>
       </article>
       <article class:warning={session.chunk_events_dropped > 0}>
         <span>Dropped chunks</span>
@@ -87,9 +90,10 @@
       <div class="panel-title-row">
         <div>
           <h3 id="main-timeline-title">Session timeline</h3>
-          <p>{formatProcessTime(currentDomain.from)} to {formatProcessTime(currentDomain.to)}</p>
+          <p>{rangeText}</p>
         </div>
-        <button type="button" onclick={() => setRange(null)} disabled={!selectedRange}>Clear range
+        <button type="button" onclick={() => setRange(null)} disabled={!selectedRange}>
+          Clear range
         </button>
       </div>
       <TimelineChart/>

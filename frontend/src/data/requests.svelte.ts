@@ -40,7 +40,9 @@ export function createRequestsState(sessionId: () => string) {
   return {
     state,
 
-    totalBytesServed,
+    totalBytesServed() {
+      return totalBytesServed
+    },
 
     load,
     clear,

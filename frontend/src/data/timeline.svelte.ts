@@ -83,8 +83,12 @@ export function createTimelineState(sessionId: () => string) {
   return {
     state,
 
-    maxMbps,
-    currentDomain,
+    maxMbps() {
+      return maxMbps
+    },
+    currentDomain() {
+      return currentDomain
+    },
 
     load,
     loadSelectedRange,

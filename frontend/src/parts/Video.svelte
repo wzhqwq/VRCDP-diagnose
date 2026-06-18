@@ -18,9 +18,12 @@
 
   const url = $derived(videoState.url)
   const paused = $derived(videoState.paused)
+  const segments = $derived(recordingSegments())
+  const startMarkers = $derived(recordingStartMarkers())
+  const playbackCursor = $derived(playbackCursorNs())
 
   const boundRecordingStartMarker = $derived(
-    recordingStartMarkers.find(
+    startMarkers.find(
       (marker) => marker.marker_id === videoState.startMarkerID
     ) ?? null,
   )
@@ -42,7 +45,7 @@
   <div class="panel-title-row compact-title-row">
     <div>
       <h3>OBS video</h3>
-      <p>{playbackCursorNs === null ? 'No cursor' : formatProcessTime(playbackCursorNs)}</p>
+      <p>{playbackCursor === null ? 'No cursor' : formatProcessTime(playbackCursor)}</p>
     </div>
     <span class="status-pill">{paused ? 'Paused' : 'Playing'}</span>
   </div>
@@ -54,9 +57,9 @@
 
   <label>
     <span>Bound start</span>
-    <select bind:value={videoState.startMarkerID} disabled={recordingStartMarkers.length === 0}>
+    <select bind:value={videoState.startMarkerID} disabled={startMarkers.length === 0}>
       <option value="">unbound</option>
-      {#each recordingStartMarkers as marker (marker.marker_id)}
+      {#each startMarkers as marker (marker.marker_id)}
         <option value={marker.marker_id}>
           {formatProcessTime(marker.marker.time?.process_uptime_ns ?? 0)}
           {marker.marker.note ? ` {marker.marker.note}` : ''}
@@ -95,7 +98,7 @@
     </div>
     <div>
       <dt>Segments</dt>
-      <dd>{recordingSegments.length}</dd>
+      <dd>{segments.length}</dd>
     </div>
   </dl>
 </article>

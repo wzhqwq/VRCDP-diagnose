@@ -70,6 +70,7 @@ Use this before adding or changing icon imports. Search by concrete names or int
 - Prioritize dense, scannable views for sessions, requests, chunk events, pacing windows, markers, and glitches.
 - Keep the initial visual system restrained: neutral surfaces, crisp borders, small status treatments, and clear data hierarchy.
 - Use D3.js for stacking views, timelines, zoom views, and diagrams.
+- For D3/SVG charts, separate structural data/layout from transient interaction state. Build chart-specific view models in pure helpers when transforms become non-trivial, and split effects so data/domain/size changes can redraw structural layers while selection, playback cursors, hover/focus, and brush state update existing SVG nodes in place. Do not let every state change clear and redraw the whole chart.
 - Keep the session list fixed on the left and the selected/current session workspace on the right.
 - The main timeline must show all visible selected-session telemetry, group displayed requests by resource id with URL/request fallback, and alternate request group colors.
 - The main timeline must support range selection; the bottom of the selected session workspace shows the zoomed D3 view and computed range details.

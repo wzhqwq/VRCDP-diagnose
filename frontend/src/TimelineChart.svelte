@@ -1,7 +1,14 @@
 <script lang="ts">
   import * as d3 from 'd3'
-  import type { WindowMetric } from './api'
-  import { buildResourceLanes, type RangeNs, requestEndNs, requestStartNs, timelineDomain, } from './timelineData'
+  import {
+    buildTimelineChartData,
+    createTimelineChartAssignments,
+    type MetricSeries,
+    type MetricPoint,
+    type RequestMark,
+    type TimelineChartData,
+  } from './timelineChartData'
+  import { type RangeNs, timelineDomain, } from './timelineData'
   import { getSessionContext } from "./data/session-state.svelte"
   import { formatProcessTime } from "./utils/format"
 
@@ -32,19 +39,70 @@
   const zoomTimeline = $derived(timelineState.zoomTimeline)
   const selectedRange = $derived(timelineState.selectedRange)
 
-  const timeline = $derived(zoom ? (zoomTimeline ?? fullTimeline) : fullTimeline)
-
   let svgElement = $state<SVGSVGElement | undefined>(undefined)
   let width = $state(0)
 
   const requestColors = ['#1d766f', '#b7652c']
   const requestMuted = ['#d8ece9', '#f3dfce']
+  const fallbackMetricColor = '#415f9f'
+  const sleepColor = '#8f579a'
   const gridColor = '#dbe2e7'
   const textColor = '#52616b'
+  const chartAssignments = createTimelineChartAssignments()
+
+  const timeline = $derived(zoom ? (zoomTimeline ?? fullTimeline) : fullTimeline)
+  const chartData = $derived.by(() => timeline
+    ? buildTimelineChartData({
+      timeline,
+      assignments: chartAssignments,
+      activeColors: requestColors,
+      mutedColors: requestMuted,
+      fallbackMetricColor,
+    })
+    : null)
+  const chartDomain = $derived(timeline ? timelineDomain(timeline, zoom ? selectedRange : null) : null)
+  const chartLayout = $derived(chartData && chartDomain && width >= 320 ? buildChartLayout(chartData, chartDomain) : null)
+
+  type ChartSvg = d3.Selection<SVGSVGElement, unknown, null, undefined>
+
+  interface ChartMargin {
+    top: number
+    right: number
+    bottom: number
+    left: number
+  }
+
+  interface ChartLayout {
+    margin: ChartMargin
+    laneHeight: number
+    laneGap: number
+    metricTop: number
+    metricHeight: number
+    renderedHeight: number
+    x: d3.ScaleLinear<number, number>
+    axisTicks: number
+    markerY1: number
+    markerY2: number
+  }
 
   $effect(() => {
-    if (!svgElement || !timeline || width < 320) return
-    renderChart()
+    if (!svgElement || !chartData || !chartLayout || !chartDomain) return
+    renderChart(chartData, chartLayout, chartDomain)
+  })
+
+  $effect(() => {
+    if (!svgElement || !chartData) return
+    applySelectionStyles(d3.select(svgElement), selectedRequestId)
+  })
+
+  $effect(() => {
+    if (!svgElement || !chartLayout) return
+    syncPlaybackCursor(d3.select(svgElement), chartLayout, playbackCursorNs())
+  })
+
+  $effect(() => {
+    if (!svgElement || !chartLayout || zoom) return
+    syncSelectionBrush(d3.select(svgElement), chartLayout)
   })
 
   function chartSvg(node: SVGSVGElement) {
@@ -56,192 +114,217 @@
     }
   }
 
-  function renderChart() {
-    if (!svgElement || !timeline) return
+  function renderChart(chartData: TimelineChartData, layout: ChartLayout, domain: RangeNs) {
+    if (!svgElement) return
+    const svg = d3.select(svgElement)
 
-    const lanes = buildResourceLanes(timeline.requests ?? [])
-    const domain = timelineDomain(timeline, zoom ? selectedRange : null)
-    const playbackCursor = playbackCursorNs()
-    const margin = { top: 18, right: 20, bottom: zoom ? 38 : 58, left: 150 }
-    const laneHeight = 28
-    const laneGap = 8
-    const requestBandHeight = Math.max(96, lanes.length * (laneHeight + laneGap) + 8)
+    setupSvg(svg, layout)
+    drawTimeAxis(svg, layout)
+    drawMetricDivider(svg, layout)
+    drawEmptyState(svg, layout, chartData)
+    drawRequestBars(svg, layout, chartData)
+    drawEventMarks(svg, layout, chartData)
+    drawMetricBand(svg, layout, chartData)
+
+    if (!zoom) {
+      drawSelectionLayer(svg, layout, domain)
+    }
+  }
+
+  function buildChartLayout(chartData: TimelineChartData, domain: RangeNs): ChartLayout {
+    const margin = { top: 18, right: 20, bottom: zoom ? 38 : 58, left: 80 }
+    const laneHeight = 20
+    const laneGap = 2
+    const requestBandHeight = Math.max(96, chartData.lanes.length * (laneHeight + laneGap) + 8)
     const metricTop = margin.top + requestBandHeight + 24
     const metricHeight = zoom ? 118 : 92
     const innerHeight = metricTop + metricHeight + margin.bottom
     const renderedHeight = Math.max(height, innerHeight)
-
-    const svg = d3.select(svgElement)
-    svg.selectAll('*').remove()
-    svg.attr('width', width).attr('height', renderedHeight).attr('viewBox', `0 0 ${width} ${renderedHeight}`)
-
     const plotWidth = Math.max(1, width - margin.left - margin.right)
     const x = d3.scaleLinear().domain([domain.from, domain.to]).range([margin.left, width - margin.right])
-    const axisTicks = Math.max(3, Math.min(8, Math.floor(plotWidth / 150)))
+    const axisTicks = Math.max(3, Math.min(8, Math.floor(plotWidth / 80)))
+
+    return {
+      margin,
+      laneHeight,
+      laneGap,
+      metricTop,
+      metricHeight,
+      renderedHeight,
+      x,
+      axisTicks,
+      markerY1: margin.top,
+      markerY2: metricTop + metricHeight,
+    }
+  }
+
+  function setupSvg(svg: ChartSvg, layout: ChartLayout) {
+    svg.selectAll('*').remove()
+    svg.attr('width', width).attr('height', layout.renderedHeight).attr('viewBox', `0 0 ${width} ${layout.renderedHeight}`)
+  }
+
+  function drawTimeAxis(svg: ChartSvg, layout: ChartLayout) {
     const xAxis = d3
-      .axisBottom(x)
-      .ticks(axisTicks)
+      .axisBottom(layout.x)
+      .ticks(layout.axisTicks)
       .tickFormat((value: d3.NumberValue) => formatProcessTime(Number(value)))
 
     svg
       .append('g')
-      .attr('transform', `translate(0,${renderedHeight - margin.bottom + 12})`)
+      .attr('transform', `translate(0,${layout.renderedHeight - layout.margin.bottom + 12})`)
       .attr('class', 'axis')
       .call(xAxis)
+  }
 
+  function drawMetricDivider(svg: ChartSvg, layout: ChartLayout) {
     svg
       .append('line')
-      .attr('x1', margin.left)
-      .attr('x2', width - margin.right)
-      .attr('y1', metricTop - 14)
-      .attr('y2', metricTop - 14)
+      .attr('x1', layout.margin.left)
+      .attr('x2', width - layout.margin.right)
+      .attr('y1', layout.metricTop - 14)
+      .attr('y2', layout.metricTop - 14)
       .attr('stroke', gridColor)
+  }
 
-    if (lanes.length === 0) {
-      svg
-        .append('text')
-        .attr('x', margin.left)
-        .attr('y', margin.top + 28)
-        .attr('fill', textColor)
-        .attr('font-size', 13)
-        .text('No requests in this range')
-    }
+  function drawEmptyState(svg: ChartSvg, layout: ChartLayout, chartData: TimelineChartData) {
+    if (chartData.lanes.length !== 0) return
+    svg
+      .append('text')
+      .attr('x', layout.margin.left)
+      .attr('y', layout.margin.top + 28)
+      .attr('fill', textColor)
+      .attr('font-size', 13)
+      .text('No requests in this range')
+  }
 
-    const laneGroups = svg
+  function drawRequestBars(svg: ChartSvg, layout: ChartLayout, chartData: TimelineChartData) {
+    svg
       .append('g')
       .attr('class', 'request-lanes')
-      .selectAll('g')
-      .data(lanes)
-      .join('g')
-      .attr('transform', (lane) => `translate(0,${margin.top + lane.index * (laneHeight + laneGap)})`)
-
-    laneGroups
-      .append('text')
-      .attr('x', 12)
-      .attr('y', 18)
-      .attr('fill', textColor)
-      .attr('font-size', 12)
-      .attr('font-weight', 650)
-      .text((lane) => lane.label)
-
-    laneGroups
-      .append('line')
-      .attr('x1', margin.left)
-      .attr('x2', width - margin.right)
-      .attr('y1', laneHeight + 4)
-      .attr('y2', laneHeight + 4)
-      .attr('stroke', '#edf1f3')
-
-    laneGroups
       .selectAll('rect.request')
-      .data((lane) => lane.requests.map((request) => ({ request, lane })))
+      .data(chartData.requestMarks)
       .join('rect')
       .attr('class', 'request')
-      .attr('x', ({ request }) => x(requestStartNs(request)))
-      .attr('y', 2)
-      .attr('width', ({ request }) => Math.max(3, x(requestEndNs(request)) - x(requestStartNs(request))))
-      .attr('height', laneHeight - 6)
+      .attr('x', (mark) => layout.x(mark.startNs))
+      .attr('y', (mark) => layout.margin.top + mark.laneIndex * (layout.laneHeight + layout.laneGap) + 2)
+      .attr('width', (mark) => Math.max(3, layout.x(mark.endNs) - layout.x(mark.startNs)))
+      .attr('height', layout.laneHeight - 6)
       .attr('rx', 4)
-      .attr('fill', ({ request, lane }) =>
-        request.request_id === selectedRequestId ? requestColors[lane.colorIndex] : requestMuted[lane.colorIndex],
-      )
-      .attr('stroke', ({ lane }) => requestColors[lane.colorIndex])
-      .attr('stroke-width', ({ request }) => (request.request_id === selectedRequestId ? 2 : 1))
+      .attr('fill', (mark) => mark.mutedFill)
+      .attr('stroke', (mark) => mark.stroke)
+      .attr('stroke-width', 1)
       .attr('tabindex', 0)
       .attr('role', 'button')
-      .attr('aria-label', ({ request }) => `Select request ${request.request_id}`)
-      .on('click', (_event: MouseEvent, { request }) => selectRequest(request))
+      .attr('aria-label', (mark) => `Select request ${mark.requestId}`)
+      .on('click', (_event: MouseEvent, mark: RequestMark) => selectRequest(mark.request))
       .append('title')
-      .text(({ request }) => `${request.request_id}\n${request.start.url_path}\n${request.start.pacing_profile_name || 'profile unknown'}`)
+      .text((mark) => mark.title)
+  }
 
-    const markerY1 = margin.top
-    const markerY2 = metricTop + metricHeight
-    for (const marker of timeline.markers ?? []) {
-      const ns = marker.marker.time?.process_uptime_ns ?? 0
-      if (ns < domain.from || ns > domain.to) continue
+  function drawEventMarks(svg: ChartSvg, layout: ChartLayout, chartData: TimelineChartData) {
+    for (const marker of chartData.markerMarks) {
+      if (!isInScaleDomain(marker.ns, layout.x)) continue
       const line = svg.append('g').attr('class', 'marker')
       line
         .append('line')
-        .attr('x1', x(ns))
-        .attr('x2', x(ns))
-        .attr('y1', markerY1)
-        .attr('y2', markerY2)
+        .attr('x1', layout.x(marker.ns))
+        .attr('x2', layout.x(marker.ns))
+        .attr('y1', layout.markerY1)
+        .attr('y2', layout.markerY2)
         .attr('stroke', '#c99720')
         .attr('stroke-width', 1.5)
         .attr('stroke-dasharray', '4 4')
       line
         .append('text')
-        .attr('x', x(ns) + 5)
-        .attr('y', markerY1 + 12)
+        .attr('x', layout.x(marker.ns) + 5)
+        .attr('y', layout.markerY1 + 12)
         .attr('fill', '#8a6310')
         .attr('font-size', 11)
-        .text(marker.marker.label)
+        .text(marker.label)
     }
 
-    for (const glitch of timeline.glitches ?? []) {
-      const ns = glitch.glitch.time?.process_uptime_ns ?? 0
-      if (ns < domain.from || ns > domain.to) continue
+    for (const glitch of chartData.glitchMarks) {
+      if (!isInScaleDomain(glitch.ns, layout.x)) continue
       const group = svg.append('g').attr('class', 'glitch')
       group
         .append('line')
-        .attr('x1', x(ns))
-        .attr('x2', x(ns))
-        .attr('y1', markerY1)
-        .attr('y2', markerY2)
+        .attr('x1', layout.x(glitch.ns))
+        .attr('x2', layout.x(glitch.ns))
+        .attr('y1', layout.markerY1)
+        .attr('y2', layout.markerY2)
         .attr('stroke', '#c93f3f')
         .attr('stroke-width', 2)
       group
         .append('path')
-        .attr('d', `M ${x(ns)} ${markerY1 - 2} l 7 12 h -14 z`)
+        .attr('d', `M ${layout.x(glitch.ns)} ${layout.markerY1 - 2} l 7 12 h -14 z`)
         .attr('fill', '#c93f3f')
-      group.append('title').text(glitch.glitch.corruption_type || glitch.glitch.severity || 'glitch')
-    }
-
-    if (playbackCursor !== null && playbackCursor >= domain.from && playbackCursor <= domain.to) {
-      const cursorX = x(playbackCursor)
-      const group = svg.append('g').attr('class', 'playback-cursor')
-      group
-        .append('line')
-        .attr('x1', cursorX)
-        .attr('x2', cursorX)
-        .attr('y1', markerY1)
-        .attr('y2', markerY2)
-        .attr('stroke', '#172027')
-        .attr('stroke-width', 2)
-      group
-        .append('text')
-        .attr('x', cursorX + 6)
-        .attr('y', markerY2 - 8)
-        .attr('fill', '#172027')
-        .attr('font-size', 11)
-        .attr('font-weight', 760)
-        .text('playback')
-    }
-
-    drawMetricBand(svg, x, metricTop, metricHeight, width, margin)
-
-    if (!zoom) {
-      drawSelection(svg, x, metricTop + metricHeight + 20, margin, width, domain)
+      group.append('title').text(glitch.title)
     }
   }
 
-  function drawMetricBand(
-    svg: d3.Selection<SVGSVGElement, unknown, null, undefined>,
-    x: d3.ScaleLinear<number, number>,
-    metricTop: number,
-    metricHeight: number,
-    chartWidth: number,
-    margin: { top: number; right: number; bottom: number; left: number },
-  ) {
-    if (!timeline) return
-    const metrics = timeline.windows ?? []
-    const maxMbps = Math.max(1, d3.max(metrics, (metric) => metric.effective_mbps) ?? 1)
-    const y = d3.scaleLinear().domain([0, maxMbps]).range([metricTop + metricHeight, metricTop])
+  function applySelectionStyles(svg: ChartSvg, selectedId: string | null) {
+    svg
+      .selectAll<SVGRectElement, RequestMark>('rect.request')
+      .attr('fill', (mark) => mark.requestId === selectedId ? mark.activeFill : mark.mutedFill)
+      .attr('stroke-width', (mark) => mark.requestId === selectedId ? 2 : 1)
+
+    svg
+      .selectAll<SVGPathElement, MetricSeries>('g.metric-lines path')
+      .attr('stroke-opacity', (series) => !selectedId || series.requestId === selectedId ? 0.95 : 0.45)
+      .attr('stroke-width', (series) => series.requestId === selectedId ? 2.2 : 1.8)
+
+    svg
+      .selectAll<SVGPathElement, MetricSeries>('g.sleep-lines path')
+      .attr('stroke-opacity', (series) => !selectedId || series.requestId === selectedId ? 0.8 : 0.35)
+      .attr('stroke-width', (series) => series.requestId === selectedId ? 1.8 : 1.4)
+  }
+
+  function syncPlaybackCursor(svg: ChartSvg, layout: ChartLayout, playbackCursor: number | null) {
+    const cursorData = playbackCursor !== null && isInScaleDomain(playbackCursor, layout.x) ? [playbackCursor] : []
+    const cursorGroups = svg
+      .selectAll<SVGGElement, number>('g.playback-cursor')
+      .data(cursorData, () => 'playback')
+
+    cursorGroups.exit().remove()
+
+    const entered = cursorGroups
+      .enter()
+      .append('g')
+      .attr('class', 'playback-cursor')
+
+    entered
+      .append('line')
+      .attr('stroke', '#172027')
+      .attr('stroke-width', 2)
+
+    entered
+      .append('text')
+      .attr('fill', '#172027')
+      .attr('font-size', 11)
+      .attr('font-weight', 760)
+      .text('playback')
+
+    const merged = entered.merge(cursorGroups)
+    merged
+      .select('line')
+      .attr('x1', (cursor) => layout.x(cursor))
+      .attr('x2', (cursor) => layout.x(cursor))
+      .attr('y1', layout.markerY1)
+      .attr('y2', layout.markerY2)
+
+    merged
+      .select('text')
+      .attr('x', (cursor) => layout.x(cursor) + 6)
+      .attr('y', layout.markerY2 - 8)
+  }
+
+  function drawMetricBand(svg: ChartSvg, layout: ChartLayout, chartData: TimelineChartData) {
+    const y = d3.scaleLinear().domain([0, chartData.maxMbps]).range([layout.metricTop + layout.metricHeight, layout.metricTop])
 
     svg
       .append('text')
       .attr('x', 12)
-      .attr('y', metricTop + 16)
+      .attr('y', layout.metricTop + 16)
       .attr('fill', textColor)
       .attr('font-size', 12)
       .attr('font-weight', 650)
@@ -249,7 +332,7 @@
 
     svg
       .append('g')
-      .attr('transform', `translate(${margin.left},0)`)
+      .attr('transform', `translate(${layout.margin.left},0)`)
       .attr('class', 'axis metric-axis')
       .call(d3.axisLeft(y).ticks(3))
 
@@ -259,96 +342,113 @@
       .selectAll('line')
       .data(y.ticks(3))
       .join('line')
-      .attr('x1', margin.left)
-      .attr('x2', chartWidth - margin.right)
+      .attr('x1', layout.margin.left)
+      .attr('x2', width - layout.margin.right)
       .attr('y1', (tick) => y(tick))
       .attr('y2', (tick) => y(tick))
       .attr('stroke', gridColor)
       .attr('stroke-dasharray', '2 5')
 
     const metricLine = d3
-      .line<WindowMetric>()
-      .x((metric) => x((metric.window_start_ns + metric.window_end_ns) / 2))
-      .y((metric) => y(metric.effective_mbps))
+      .line<MetricPoint>()
+      .x((point) => layout.x(point.xNs))
+      .y((point) => y(point.effectiveMbps))
 
     svg
-      .append('path')
-      .datum(metrics)
+      .append('g')
+      .attr('class', 'metric-lines')
+      .selectAll('path')
+      .data(chartData.metricSeries)
+      .join('path')
       .attr('fill', 'none')
-      .attr('stroke', '#415f9f')
+      .attr('stroke', (series) => series.color)
+      .attr('stroke-opacity', 0.95)
       .attr('stroke-width', 1.8)
-      .attr('d', metricLine)
+      .attr('d', (series) => metricLine(series.points))
+      .append('title')
+      .text((series) => series.title)
 
     if (zoom) {
-      const sleepMax = Math.max(1, d3.max(metrics, (metric) => metric.max_sleep_actual_ns) ?? 1)
-      const sleepY = d3.scaleLinear().domain([0, sleepMax]).range([metricTop + metricHeight, metricTop])
+      const sleepY = d3.scaleLinear().domain([0, chartData.maxSleepActualNs]).range([layout.metricTop + layout.metricHeight, layout.metricTop])
       const sleepLine = d3
-        .line<WindowMetric>()
-        .x((metric) => x((metric.window_start_ns + metric.window_end_ns) / 2))
-        .y((metric) => sleepY(metric.max_sleep_actual_ns))
+        .line<MetricPoint>()
+        .x((point) => layout.x(point.xNs))
+        .y((point) => sleepY(point.maxSleepActualNs))
 
       svg
-        .append('path')
-        .datum(metrics)
+        .append('g')
+        .attr('class', 'sleep-lines')
+        .selectAll('path')
+        .data(chartData.metricSeries)
+        .join('path')
         .attr('fill', 'none')
-        .attr('stroke', '#8f579a')
+        .attr('stroke', sleepColor)
+        .attr('stroke-opacity', 0.8)
         .attr('stroke-width', 1.4)
         .attr('stroke-dasharray', '5 4')
-        .attr('d', sleepLine)
+        .attr('d', (series) => sleepLine(series.points))
 
       svg
         .append('text')
-        .attr('x', chartWidth - margin.right - 132)
-        .attr('y', metricTop + 16)
-        .attr('fill', '#8f579a')
+        .attr('x', width - layout.margin.right - 132)
+        .attr('y', layout.metricTop + 16)
+        .attr('fill', sleepColor)
         .attr('font-size', 11)
         .text('sleep actual')
     }
   }
 
-  function drawSelection(
-    svg: d3.Selection<SVGSVGElement, unknown, null, undefined>,
-    x: d3.ScaleLinear<number, number>,
-    brushY: number,
-    margin: { top: number; right: number; bottom: number; left: number },
-    chartWidth: number,
+  function isInScaleDomain(ns: number, x: d3.ScaleLinear<number, number>): boolean {
+    const [from, to] = x.domain()
+    return ns >= from && ns <= to
+  }
+
+  function drawSelectionLayer(
+    svg: ChartSvg,
+    layout: ChartLayout,
     domain: RangeNs,
   ) {
     const brushHeight = 34
-    let restoringSelection = false
+    const brushY = layout.metricTop + layout.metricHeight + 20
     const brush = d3
       .brushX()
       .extent([
-        [margin.left, brushY],
-        [chartWidth - margin.right, brushY + brushHeight],
+        [layout.margin.left, brushY],
+        [width - layout.margin.right, brushY + brushHeight],
       ])
       .on('end', (event: d3.D3BrushEvent<unknown>) => {
-        if (restoringSelection) return
         if (!event.selection) {
           setRange(null)
           return
         }
         const [x0, x1] = event.selection as [number, number]
         setRange({
-          from: Math.max(domain.from, x.invert(x0)),
-          to: Math.min(domain.to, x.invert(x1)),
+          from: Math.max(domain.from, layout.x.invert(x0)),
+          to: Math.min(domain.to, layout.x.invert(x1)),
         })
       })
 
-    const brushGroup = svg.append('g').attr('class', 'timeline-brush').call(brush)
-    if (selectedRange) {
-      restoringSelection = true
-      brushGroup.call(brush.move, [x(selectedRange.from), x(selectedRange.to)])
-      restoringSelection = false
-    }
+    svg.append('g').attr('class', 'timeline-brush').call(brush)
 
     svg
       .append('text')
-      .attr('x', margin.left)
+      .attr('x', layout.margin.left)
       .attr('y', brushY - 7)
       .attr('fill', textColor)
       .attr('font-size', 11)
       .text('Select a range for bottom zoom')
+  }
+
+  function syncSelectionBrush(svg: ChartSvg, layout: ChartLayout) {
+    const brushGroup = svg.select<SVGGElement>('g.timeline-brush')
+    if (brushGroup.empty()) return
+
+    const brushY = layout.metricTop + layout.metricHeight + 20
+    const brush = d3.brushX().extent([
+      [layout.margin.left, brushY],
+      [width - layout.margin.right, brushY + 34],
+    ])
+    brushGroup.call(brush.move, selectedRange ? [layout.x(selectedRange.from), layout.x(selectedRange.to)] : null)
   }
 </script>
 

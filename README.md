@@ -95,6 +95,30 @@ If mounted at `"/diagnostics"` with prefix stripping, the externally visible sta
 GET /diagnostics/api/stats
 ```
 
+## Standalone Frontend Server
+
+For frontend work without running the full VRCDP application, use the minimal
+diagnostics server. It initializes the diagnostics SQLite tables through
+`internal/persistence.InitDiagnoseDB`, then serves the embedded diagnostics UI
+and API at `/diagnosis/`.
+
+```powershell
+$env:GOCACHE='E:\go_cache\build'
+$env:GOMODCACHE='E:\go_cache\mod'
+$env:GOPROXY='https://proxy.golang.org,direct'
+& 'C:\Users\wzhii\go\go1.25.0\bin\go.exe' run ./cmd/diagnosis-server -db .\diagnose.db
+```
+
+Open:
+
+```text
+http://localhost:7653/diagnosis/
+```
+
+By default the server only opens the database and exposes existing diagnostic
+sessions. Add `-start-session` if you want the standalone process to create a
+new diagnostics session for marker/glitch writes during manual testing.
+
 ## 4. Context-First Request Instrumentation
 
 At the beginning of a video request, call `BeginHTTP`. It builds request metadata, honors the main project's request/resource IDs, and stores the diagnostic request reference in the returned context.

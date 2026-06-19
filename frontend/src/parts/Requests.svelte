@@ -15,11 +15,10 @@
   const selectedRequestId = $derived(sessionState.selectedRequestId)
 
 </script>
-<section aria-labelledby="request-list-title" class="request-table-panel">
+<section aria-labelledby="request-list-title" class="panel">
   <h3 id="request-list-title">Requests</h3>
   <div class="request-table">
     <div class="request-row header">
-      <span>Request</span>
       <span>Resource</span>
       <span>Profile</span>
       <span>Start</span>
@@ -33,7 +32,6 @@
           type="button"
           onclick={() => selectRequest(request)}
       >
-        <span>{request.request_id}</span>
         <span>{resourceKey(request)}</span>
         <span>{request.start.pacing_profile_name || 'unset'}</span>
         <span>{formatProcessTime(requestStartNs(request))}</span>

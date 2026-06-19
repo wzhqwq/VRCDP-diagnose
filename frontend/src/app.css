@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 :root {
     --bg: #f4f6f7;
     --surface: #ffffff;
@@ -251,13 +253,6 @@ p {
     background: #fff1f1;
 }
 
-.stats-grid {
-    display: grid;
-    grid-template-columns: repeat(6, minmax(118px, 1fr));
-    gap: 10px;
-    margin-bottom: 14px;
-}
-
 .stats-grid article {
     min-height: 70px;
     border: 1px solid var(--border);
@@ -285,18 +280,19 @@ label span {
     color: var(--copper);
 }
 
-.timeline-panel,
-.zoom-panel,
-.compact-panel,
-.request-table-panel {
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--surface);
-    box-shadow: var(--shadow);
+.panel {
+  @apply border rounded-lg bg-gray-50 border-gray-200 shadow;
+  @apply p-4;
+}
+
+.tab-list {
+  @apply h-10;
+}
+.tab-list button {
+  @apply px-3 py-1 text-sm font-medium text-gray-600 rounded-md;
 }
 
 .timeline-panel {
-    min-height: 470px;
     margin-bottom: 14px;
     padding: 14px;
 }
@@ -349,14 +345,12 @@ label span {
 
 .timeline-host {
     width: 100%;
-    min-height: 300px;
     overflow: hidden;
 }
 
 .timeline-svg {
     display: block;
     width: 100%;
-    min-height: 300px;
 }
 
 .timeline-empty,
@@ -388,44 +382,21 @@ label span {
 }
 
 .timeline-brush .selection {
-    fill: rgba(65, 95, 159, 0.18);
-    stroke: var(--blue);
+    @apply fill-blue-500/60;
 }
 
 .timeline-brush .handle {
-    fill: var(--blue);
+    @apply fill-blue-500;
 }
 
 .playback-cursor line {
     pointer-events: none;
 }
 
-.range-facts {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px;
-    margin: 12px 0 0;
-}
-
-.range-facts div,
-.request-detail div {
-    min-width: 0;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--surface-subtle);
-    padding: 9px;
-}
-
 dd {
     margin: 4px 0 0;
     overflow-wrap: anywhere;
     font-weight: 720;
-}
-
-.marker-buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
 }
 
 .marker-buttons button {
@@ -511,12 +482,6 @@ dd {
     background: var(--red);
 }
 
-.request-detail {
-    display: grid;
-    gap: 7px;
-    margin: 0;
-}
-
 .request-table-panel {
     margin-top: 14px;
     padding: 14px;
@@ -531,10 +496,9 @@ dd {
 
 .request-row {
     display: grid;
-    grid-template-columns: minmax(160px, 1.2fr) minmax(180px, 1.4fr) minmax(120px, 0.8fr) 90px 90px 96px;
+    grid-template-columns: minmax(160px, 1.4fr) minmax(100px, 0.8fr) 90px 90px 96px;
     gap: 10px;
     align-items: center;
-    min-width: 860px;
     min-height: 38px;
     border: 1px solid var(--border);
     border-radius: 6px;

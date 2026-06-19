@@ -6,9 +6,8 @@
   const markerLabels = ['glitch_seen', 'avatar_switch', 'mirror_opened', 'test_start', 'test_end', 'note']
 </script>
 
-<article class="compact-panel">
-  <h3>Markers</h3>
-  <div class="marker-buttons">
+<article class="border border-gray-200 p-2 rounded-xl">
+  <div class="marker-buttons flex gap-2">
     {#each markerLabels as label (label)}
       <button type="button" onclick={() => addCursorMarker(label)}>{label}</button>
     {/each}

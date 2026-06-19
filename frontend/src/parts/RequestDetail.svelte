@@ -6,10 +6,10 @@
   const { selectedRequest } = getSessionContext()
   const request = $derived(selectedRequest())
 </script>
-<article class="compact-panel">
+<article class="panel flex flex-col gap-2">
   <h3>Selected request</h3>
   {#if request}
-    <dl class="request-detail">
+    <dl class="grid grid-cols-2 gap-2">
       <div>
         <dt>ID</dt>
         <dd>{request.request_id}</dd>

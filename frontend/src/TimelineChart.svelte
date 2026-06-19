@@ -31,7 +31,7 @@
 
   const {
     zoom = false,
-    height = 360,
+    height = 100,
   }: Props = $props()
 
   const selectedRequestId = $derived(sessionState.selectedRequestId)
@@ -135,9 +135,9 @@
     const margin = { top: 18, right: 20, bottom: zoom ? 38 : 58, left: 80 }
     const laneHeight = 20
     const laneGap = 2
-    const requestBandHeight = Math.max(96, chartData.lanes.length * (laneHeight + laneGap) + 8)
-    const metricTop = margin.top + requestBandHeight + 24
-    const metricHeight = zoom ? 118 : 92
+    const requestBandHeight = Math.max(30, chartData.lanes.length * (laneHeight + laneGap) + 8)
+    const metricTop = margin.top + requestBandHeight + 14
+    const metricHeight = zoom ? 130 : 92
     const innerHeight = metricTop + metricHeight + margin.bottom
     const renderedHeight = Math.max(height, innerHeight)
     const plotWidth = Math.max(1, width - margin.left - margin.right)
@@ -408,8 +408,8 @@
     layout: ChartLayout,
     domain: RangeNs,
   ) {
-    const brushHeight = 34
-    const brushY = layout.metricTop + layout.metricHeight + 20
+    const brushHeight = 12
+    const brushY = layout.renderedHeight - layout.margin.bottom + 6
     const brush = d3
       .brushX()
       .extent([
@@ -430,23 +430,24 @@
 
     svg.append('g').attr('class', 'timeline-brush').call(brush)
 
-    svg
-      .append('text')
-      .attr('x', layout.margin.left)
-      .attr('y', brushY - 7)
-      .attr('fill', textColor)
-      .attr('font-size', 11)
-      .text('Select a range for bottom zoom')
+    // svg
+    //   .append('text')
+    //   .attr('x', layout.margin.left)
+    //   .attr('y', brushY - 7)
+    //   .attr('fill', textColor)
+    //   .attr('font-size', 11)
+    //   .text('Select a range for bottom zoom')
   }
 
   function syncSelectionBrush(svg: ChartSvg, layout: ChartLayout) {
     const brushGroup = svg.select<SVGGElement>('g.timeline-brush')
     if (brushGroup.empty()) return
 
-    const brushY = layout.metricTop + layout.metricHeight + 20
+    const brushHeight = 12
+    const brushY = layout.renderedHeight - layout.margin.bottom + 6
     const brush = d3.brushX().extent([
       [layout.margin.left, brushY],
-      [width - layout.margin.right, brushY + 34],
+      [width - layout.margin.right, brushY + brushHeight],
     ])
     brushGroup.call(brush.move, selectedRange ? [layout.x(selectedRange.from), layout.x(selectedRange.to)] : null)
   }

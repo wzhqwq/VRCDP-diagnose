@@ -18,9 +18,9 @@
 
   const detailTimeline = $derived(zoomTimeline ?? timeline)
   const rangeSummary = $derived(summarizeRange(detailTimeline, selectedRange, (session?.chunk_events_dropped ?? 0) > 0))
-
 </script>
-<article aria-labelledby="zoom-title" class="zoom-panel">
+
+<article aria-labelledby="zoom-title" class="panel">
   <div class="panel-title-row">
     <div>
       <h3 id="zoom-title">Zoomed range</h3>
@@ -34,7 +34,7 @@
     </div>
   </div>
   <TimelineChart height={300} zoom/>
-  <dl class="range-facts">
+  <dl class="grid grid-cols-4 gap-2 mt-2 pt-2 border-t border-gray-300" aria-label="Summary statistics for the zoomed range">
     <div>
       <dt>Duration</dt>
       <dd>{rangeSummary.durationMs.toFixed(0)} ms</dd>

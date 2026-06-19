@@ -41,7 +41,7 @@
   }
 </script>
 
-<article class="compact-panel video-panel">
+<article class="panel video-panel">
   <div class="panel-title-row compact-title-row">
     <div>
       <h3>OBS video</h3>

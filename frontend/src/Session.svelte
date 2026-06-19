@@ -17,6 +17,8 @@
 
   const { sessionId, version }: Props = $props()
 
+  let rightTab = $state('requests' as 'requests' | 'video')
+
   const sessionState = createSessionState()
   setSessionContext(sessionState)
 
@@ -59,57 +61,73 @@
   </header>
 
   {#if session}
-    <section class="stats-grid" aria-label="Session and runtime summary">
-      <article>
-        <span>Runtime</span>
-        <strong>{$stats?.enabled ? 'enabled' : 'disabled'}</strong>
-      </article>
-      <article>
-        <span>Requests</span>
-        <strong>{session.request_count}</strong>
-      </article>
-      <article>
-        <span>Total served</span>
-        <strong>{servedBytes}</strong>
-      </article>
-      <article>
-        <span>Max Mbps</span>
-        <strong>{maxMbpsFixed}</strong>
-      </article>
-      <article class:warning={session.chunk_events_dropped > 0}>
-        <span>Dropped chunks</span>
-        <strong>{session.chunk_events_dropped}</strong>
-      </article>
-      <article>
-        <span>Queue</span>
-        <strong>{$stats?.queue_length ?? 0}</strong>
-      </article>
+    <section class="grid grid-cols-[1fr_minmax(0,360px)] gap-2 mb-2">
+      <session class="flex flex-col gap-2 min-w-4xl">
+        <section class="stats-grid grid grid-cols-6 gap-2" aria-label="Session and runtime summary">
+          <article>
+            <span>Runtime</span>
+            <strong>{$stats?.enabled ? 'enabled' : 'disabled'}</strong>
+          </article>
+          <article>
+            <span>Requests</span>
+            <strong>{session.request_count}</strong>
+          </article>
+          <article>
+            <span>Total served</span>
+            <strong>{servedBytes}</strong>
+          </article>
+          <article>
+            <span>Max Mbps</span>
+            <strong>{maxMbpsFixed}</strong>
+          </article>
+          <article class:warning={session.chunk_events_dropped > 0}>
+            <span>Dropped chunks</span>
+            <strong>{session.chunk_events_dropped}</strong>
+          </article>
+          <article>
+            <span>Queue</span>
+            <strong>{$stats?.queue_length ?? 0}</strong>
+          </article>
+        </section>
+        <section class="panel" aria-labelledby="main-timeline-title">
+          <div class="panel-title-row">
+            <div>
+              <h3 id="main-timeline-title">Session timeline</h3>
+              <p>{rangeText}</p>
+            </div>
+            <button type="button" onclick={() => setRange(null)} disabled={!selectedRange}>
+              Clear range
+            </button>
+          </div>
+          <TimelineChart/>
+          <Markers/>
+        </section>
+      </session>
+      <section class="flex flex-col gap-2">
+        <section class="flex gap-2 tab-list" aria-label="Data source selection">
+          <button class:active={rightTab === 'requests'} onclick={() => rightTab = 'requests'} type="button">
+            Requests
+          </button>
+          <button class:active={rightTab === 'video'} onclick={() => rightTab = 'video'} type="button">
+            Video
+          </button>
+        </section>
+        {#if rightTab == "requests"}
+          <Requests/>
+        {:else if rightTab == "video"}
+          <Video/>
+        {/if}
+      </section>
     </section>
 
-    <section class="timeline-panel" aria-labelledby="main-timeline-title">
-      <div class="panel-title-row">
-        <div>
-          <h3 id="main-timeline-title">Session timeline</h3>
-          <p>{rangeText}</p>
-        </div>
-        <button type="button" onclick={() => setRange(null)} disabled={!selectedRange}>
-          Clear range
-        </button>
-      </div>
-      <TimelineChart/>
-    </section>
-
-    <section class="bottom-grid">
+    <section class="grid grid-cols-[1fr_minmax(0,360px)] gap-2">
       <Zoomed/>
       <aside class="detail-stack">
-        <Video/>
-        <Markers/>
-        <GlitchForm/>
+        <!-- <GlitchForm/> -->
         <RequestDetail/>
       </aside>
     </section>
 
-    <Requests/>
   {:else}
     <div class="empty-workspace">No diagnostic session is available yet.</div>
   {/if}

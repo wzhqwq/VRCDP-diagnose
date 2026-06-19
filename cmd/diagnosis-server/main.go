@@ -18,7 +18,7 @@ import (
 func main() {
 	dbPath := flag.String("db", "diagnose.db", "path to the diagnostics SQLite database file")
 	addr := flag.String("addr", "localhost:7653", "HTTP listen address")
-	prefix := flag.String("prefix", "/diagnosis/", "URL prefix for the diagnostics UI and API")
+	prefix := flag.String("prefix", "/diagnostics/", "URL prefix for the diagnostics UI and API")
 	startSession := flag.Bool("start-session", false, "create a new diagnostics session on startup")
 	flag.Parse()
 

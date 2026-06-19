@@ -689,7 +689,7 @@ func scanRequests(rows *sql.Rows) ([]requestSummary, error) {
 		var r requestSummary
 		var startJSON string
 		var endJSON string
-		var incomplete int
+		var incomplete bool
 		if err := rows.Scan(&r.RequestID, &r.SessionID, &startJSON, &endJSON, &incomplete); err != nil {
 			return nil, err
 		}
@@ -703,7 +703,7 @@ func scanRequests(rows *sql.Rows) ([]requestSummary, error) {
 			}
 			r.End = &end
 		}
-		r.Incomplete = incomplete != 0
+		r.Incomplete = incomplete
 		requests = append(requests, r)
 	}
 	return requests, rows.Err()

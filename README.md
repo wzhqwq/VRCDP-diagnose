@@ -214,7 +214,20 @@ If `Time` is omitted, the manager stamps the event with `diag.Now()`.
 
 ## 8. OBS Recording Markers
 
-When the manager starts, it also attempts to connect to OBS through obs-websocket on the hard-coded endpoint `127.0.0.1:4455` with the hard-coded password in `diagnose/obs.go`.
+Create a separate OBS worker and point it at the current diagnostics manager. The worker can stay connected while diagnostics sessions are swapped in or out with `SetManager`. Passing `nil` keeps the OBS connection alive but drops OBS markers until another manager is attached.
+
+```go
+obsWorker := diagnose.NewOBSWorker(nil)
+obsWorker.SetManager(diag)
+
+if err := obsWorker.Start(ctx, diagnose.OBSConnectionConfig{
+	Host:     obsHost,
+	Password: obsPassword,
+}); err != nil {
+	return err
+}
+defer obsWorker.Stop(context.Background())
+```
 
 The OBS watcher subscribes to output events and records these markers:
 

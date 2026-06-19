@@ -98,10 +98,6 @@ func (m *diagnosticManager) Start(ctx context.Context) error {
 
 	m.workerWG.Add(1)
 	go m.chunkWorker()
-	if m.cfg.WatchOBSRecording {
-		m.workerWG.Add(1)
-		go m.obsRecordingWorker()
-	}
 	return nil
 }
 
@@ -119,7 +115,11 @@ func (m *diagnosticManager) Shutdown(ctx context.Context) error {
 
 func (m *diagnosticManager) SessionID() string { return m.sessionID }
 
-func (m *diagnosticManager) Started() bool { return m.started }
+func (m *diagnosticManager) Started() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.started
+}
 
 func (m *diagnosticManager) Now() TimePoint {
 	now := time.Now()

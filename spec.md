@@ -83,8 +83,8 @@ type Manager interface {
 	Start(ctx context.Context) error
 	Shutdown(ctx context.Context) error
 
-	Enabled() bool
 	SessionID() string
+	Started() bool
 	Now() TimePoint
 
 	HTTPHandler() http.Handler
@@ -103,6 +103,24 @@ type Manager interface {
 ```
 
 Codex should implement a real `Manager` behind this interface.
+
+OBS recording markers are owned by a separate worker. The host application can start or stop the OBS worker independently, keep it connected across diagnostics sessions, and dynamically retarget marker recording with `SetManager`.
+
+```go
+type OBSConnectionConfig struct {
+	Host     string
+	Password string
+}
+
+type OBSWorker struct { ... }
+
+func NewOBSWorker(manager Manager) *OBSWorker
+func (w *OBSWorker) SetManager(manager Manager)
+func (w *OBSWorker) Start(ctx context.Context, cfg OBSConnectionConfig) error
+func (w *OBSWorker) Stop(ctx context.Context) error
+```
+
+`OBSWorker.Start` must return an error when the websocket connection or OBS `Identify` step cannot be established.
 
 The primary request integration should use context helpers and ReadSeeker wrapping. The explicit `BeginRequest`, `RecordChunk`, and `EndRequest` methods remain available as lower-level compatibility APIs.
 
@@ -1038,7 +1056,7 @@ Codex should first implement:
 6. RuntimeStats counters.
 7. Manual marker recording.
 8. Manual glitch recording.
-9. OBS start/stop recording markers through obs-websocket.
+9. Explicit OBS start/stop/pause/resume recording markers through configured obs-websocket connection.
 10. 50ms and 100ms window aggregation.
 11. Minimal HTTP API.
 12. Minimal frontend:

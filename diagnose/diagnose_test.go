@@ -1,12 +1,16 @@
 package diagnose
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -581,6 +585,178 @@ func TestOBSRecordingMarker(t *testing.T) {
 	if _, ok := obsRecordingMarker(now, json.RawMessage(`{"outputState":"OBS_WEBSOCKET_OUTPUT_STARTING"}`)); ok {
 		t.Fatal("transient state produced marker")
 	}
+}
+
+func TestStartOBSConnectionReturnsConnectionError(t *testing.T) {
+	worker := NewOBSWorker(nil)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	err = worker.Start(context.Background(), OBSConnectionConfig{Host: addr})
+	if err == nil {
+		t.Fatal("OBSWorker.Start returned nil for a closed listener")
+	}
+}
+
+func TestOBSWorkerRecordsEventWithAttachedManagerBeforeManagerStart(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	defer listener.Close()
+
+	serverDone := make(chan error, 1)
+	go serveTestOBSWebSocket(listener, serverDone)
+
+	m := newDiagnosticManager(Config{}, testStore{})
+	worker := NewOBSWorker(m)
+
+	if err := worker.Start(context.Background(), OBSConnectionConfig{Host: listener.Addr().String()}); err != nil {
+		t.Fatalf("OBSWorker.Start returned error: %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if m.RuntimeStats().MarkersRecorded == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := m.RuntimeStats().MarkersRecorded; got != 1 {
+		t.Fatalf("markers recorded = %d, want 1", got)
+	}
+	if err := worker.Stop(context.Background()); err != nil {
+		t.Fatalf("OBSWorker.Stop returned error: %v", err)
+	}
+	if err := <-serverDone; err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("test OBS server returned error: %v", err)
+	}
+}
+
+func TestOBSWorkerDropsEventsWithoutManager(t *testing.T) {
+	worker := NewOBSWorker(nil)
+	worker.recordOBSRecordingMarker(context.Background(), json.RawMessage(`{"outputActive":true,"outputState":"OBS_WEBSOCKET_OUTPUT_STARTED","outputPath":null}`))
+}
+
+func TestOBSWorkerSetManagerRetargetsMarkers(t *testing.T) {
+	first := newDiagnosticManager(Config{}, testStore{})
+	second := newDiagnosticManager(Config{}, testStore{})
+	worker := NewOBSWorker(first)
+
+	raw := json.RawMessage(`{"outputActive":true,"outputState":"OBS_WEBSOCKET_OUTPUT_STARTED","outputPath":null}`)
+	worker.recordOBSRecordingMarker(context.Background(), raw)
+	if got := first.RuntimeStats().MarkersRecorded; got != 1 {
+		t.Fatalf("first markers recorded = %d, want 1", got)
+	}
+	if got := second.RuntimeStats().MarkersRecorded; got != 0 {
+		t.Fatalf("second markers recorded = %d, want 0", got)
+	}
+
+	worker.SetManager(second)
+	worker.recordOBSRecordingMarker(context.Background(), raw)
+	if got := first.RuntimeStats().MarkersRecorded; got != 1 {
+		t.Fatalf("first markers recorded after retarget = %d, want 1", got)
+	}
+	if got := second.RuntimeStats().MarkersRecorded; got != 1 {
+		t.Fatalf("second markers recorded after retarget = %d, want 1", got)
+	}
+
+	worker.SetManager(nil)
+	worker.recordOBSRecordingMarker(context.Background(), raw)
+	if got := second.RuntimeStats().MarkersRecorded; got != 1 {
+		t.Fatalf("second markers recorded after nil target = %d, want 1", got)
+	}
+}
+
+func serveTestOBSWebSocket(listener net.Listener, done chan<- error) {
+	conn, err := listener.Accept()
+	if err != nil {
+		done <- err
+		return
+	}
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		done <- err
+		return
+	}
+	key := req.Header.Get("Sec-WebSocket-Key")
+	if key == "" {
+		done <- errors.New("missing websocket key")
+		return
+	}
+	_, err = fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\n"+
+		"Upgrade: websocket\r\n"+
+		"Connection: Upgrade\r\n"+
+		"Sec-WebSocket-Accept: %s\r\n"+
+		"Sec-WebSocket-Protocol: obswebsocket.json\r\n\r\n", webSocketAccept(key))
+	if err != nil {
+		done <- err
+		return
+	}
+
+	if err := writeServerWebSocketText(conn, []byte(`{"op":0,"d":{"rpcVersion":1}}`)); err != nil {
+		done <- err
+		return
+	}
+	if _, err := readWebSocketFrame(reader); err != nil {
+		done <- err
+		return
+	}
+	if err := writeServerWebSocketText(conn, []byte(`{"op":2,"d":{"negotiatedRpcVersion":1}}`)); err != nil {
+		done <- err
+		return
+	}
+	if err := writeServerWebSocketText(conn, []byte(`{"op":5,"d":{"eventType":"RecordStateChanged","eventIntent":64,"eventData":{"outputActive":true,"outputState":"OBS_WEBSOCKET_OUTPUT_STARTED","outputPath":null}}}`)); err != nil {
+		done <- err
+		return
+	}
+
+	_, err = readWebSocketFrame(reader)
+	done <- err
+}
+
+func writeServerWebSocketText(w io.Writer, payload []byte) error {
+	header := []byte{0x81, 0}
+	length := len(payload)
+	switch {
+	case length < 126:
+		header[1] = byte(length)
+		if _, err := w.Write(header); err != nil {
+			return err
+		}
+	case length <= 65535:
+		header[1] = 126
+		if _, err := w.Write(header); err != nil {
+			return err
+		}
+		var extended [2]byte
+		binary.BigEndian.PutUint16(extended[:], uint16(length))
+		if _, err := w.Write(extended[:]); err != nil {
+			return err
+		}
+	default:
+		header[1] = 127
+		if _, err := w.Write(header); err != nil {
+			return err
+		}
+		var extended [8]byte
+		binary.BigEndian.PutUint64(extended[:], uint64(length))
+		if _, err := w.Write(extended[:]); err != nil {
+			return err
+		}
+	}
+	_, err := w.Write(payload)
+	return err
 }
 
 type testStore struct{}

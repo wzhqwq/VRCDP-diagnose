@@ -18,9 +18,15 @@ type Config struct {
 	WindowAggregationEnabled bool
 	QueueSize                int
 	DropOnOverflow           bool
-	WatchOBSRecording        bool
 
 	WindowSizes []time.Duration
+}
+
+// OBSConnectionConfig controls an explicit obs-websocket recording marker
+// connection.
+type OBSConnectionConfig struct {
+	Host     string
+	Password string
 }
 
 // Manager is the public integration boundary for diagnostics.

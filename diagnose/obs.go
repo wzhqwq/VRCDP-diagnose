@@ -16,13 +16,10 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"time"
+	"sync"
 )
 
 const (
-	obsWebSocketHost     = "127.0.0.1:4455"
-	obsWebSocketPassword = "123456"
-
 	obsRPCVersion               = 1
 	obsOpHello                  = 0
 	obsOpIdentify               = 1
@@ -36,6 +33,39 @@ const (
 	obsOutputPaused            = "OBS_WEBSOCKET_OUTPUT_PAUSED"
 	obsOutputResumed           = "OBS_WEBSOCKET_OUTPUT_RESUMED"
 )
+
+type obsRuntime struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// OBSWorker owns an obs-websocket connection and records OBS recording state
+// markers into whichever diagnostics manager is currently attached.
+type OBSWorker struct {
+	startMu sync.Mutex
+
+	mu      sync.RWMutex
+	manager Manager
+	runtime *obsRuntime
+}
+
+// NewOBSWorker creates an OBS worker. The manager may be nil and can be changed
+// later with SetManager.
+func NewOBSWorker(manager Manager) *OBSWorker {
+	return &OBSWorker{manager: manager}
+}
+
+// SetManager changes the diagnostics manager that receives OBS markers. Passing
+// nil keeps the OBS connection alive but drops future OBS markers until another
+// manager is attached.
+func (w *OBSWorker) SetManager(manager Manager) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.manager = manager
+}
 
 type obsMessage struct {
 	Op   int             `json:"op"`
@@ -69,56 +99,104 @@ type obsRecordStateData struct {
 	OutputPath   *string `json:"outputPath"`
 }
 
-func (m *diagnosticManager) obsRecordingWorker() {
-	defer m.workerWG.Done()
-
-	backoff := time.Second
-	for {
-		if err := m.observeOBSRecording(); err == nil || m.shutdown.Load() {
-			return
-		}
-
-		select {
-		case <-time.After(backoff):
-			if backoff < 10*time.Second {
-				backoff *= 2
-			}
-		case <-m.done:
-			return
-		}
+func (w *OBSWorker) Start(ctx context.Context, cfg OBSConnectionConfig) error {
+	if w == nil {
+		return errors.New("obs worker is nil")
 	}
-}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cfg.Host = strings.TrimSpace(cfg.Host)
+	if cfg.Host == "" {
+		return errors.New("obs websocket host is required")
+	}
 
-func (m *diagnosticManager) observeOBSRecording() error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	w.startMu.Lock()
+	defer w.startMu.Unlock()
 
-	go func() {
-		select {
-		case <-m.done:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
+	w.mu.RLock()
+	if w.runtime != nil {
+		w.mu.RUnlock()
+		return nil
+	}
+	w.mu.RUnlock()
 
-	conn, reader, err := dialOBSWebSocket(ctx)
+	conn, reader, err := dialOBSWebSocket(ctx, cfg.Host)
 	if err != nil {
 		return err
 	}
+
+	if err := identifyOBS(reader, conn, cfg.Password); err != nil {
+		_ = conn.Close()
+		return err
+	}
+
+	obsCtx, cancel := context.WithCancel(context.Background())
+	rt := &obsRuntime{cancel: cancel, done: make(chan struct{})}
+
+	w.mu.Lock()
+	if w.runtime != nil {
+		w.mu.Unlock()
+		cancel()
+		_ = conn.Close()
+		return nil
+	}
+	w.runtime = rt
+	w.mu.Unlock()
+
+	go w.run(obsCtx, rt, conn, reader)
+	return nil
+}
+
+func (w *OBSWorker) Stop(ctx context.Context) error {
+	if w == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	w.startMu.Lock()
+	defer w.startMu.Unlock()
+
+	w.mu.Lock()
+	rt := w.runtime
+	if rt == nil {
+		w.mu.Unlock()
+		return nil
+	}
+	w.runtime = nil
+	w.mu.Unlock()
+
+	rt.cancel()
+	select {
+	case <-rt.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (w *OBSWorker) run(ctx context.Context, rt *obsRuntime, conn net.Conn, reader *bufio.Reader) {
+	defer close(rt.done)
 	defer conn.Close()
+	defer func() {
+		w.mu.Lock()
+		if w.runtime == rt {
+			w.runtime = nil
+		}
+		w.mu.Unlock()
+	}()
+
 	go func() {
 		<-ctx.Done()
 		_ = conn.Close()
 	}()
 
-	if err := identifyOBS(reader, conn); err != nil {
-		return err
-	}
-
 	for {
 		msg, err := readOBSMessage(reader)
 		if err != nil {
-			return err
+			return
 		}
 		if msg.Op != obsOpEvent {
 			continue
@@ -128,17 +206,26 @@ func (m *diagnosticManager) observeOBSRecording() error {
 			continue
 		}
 		if event.EventType == obsEventRecordStateChanged {
-			m.recordOBSRecordingMarker(context.Background(), event.EventData)
+			w.recordOBSRecordingMarker(context.Background(), event.EventData)
 		}
 	}
 }
 
-func dialOBSWebSocket(ctx context.Context) (net.Conn, *bufio.Reader, error) {
+func dialOBSWebSocket(ctx context.Context, host string) (net.Conn, *bufio.Reader, error) {
 	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", obsWebSocketHost)
+	conn, err := dialer.DialContext(ctx, "tcp", host)
 	if err != nil {
 		return nil, nil, err
 	}
+	stopCloseOnCancel := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-stopCloseOnCancel:
+		}
+	}()
+	defer close(stopCloseOnCancel)
 
 	key, err := webSocketKey()
 	if err != nil {
@@ -147,7 +234,7 @@ func dialOBSWebSocket(ctx context.Context) (net.Conn, *bufio.Reader, error) {
 	}
 
 	req := "GET / HTTP/1.1\r\n" +
-		"Host: " + obsWebSocketHost + "\r\n" +
+		"Host: " + host + "\r\n" +
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +
 		"Sec-WebSocket-Key: " + key + "\r\n" +
@@ -176,7 +263,7 @@ func dialOBSWebSocket(ctx context.Context) (net.Conn, *bufio.Reader, error) {
 	return conn, reader, nil
 }
 
-func identifyOBS(reader *bufio.Reader, conn net.Conn) error {
+func identifyOBS(reader *bufio.Reader, conn net.Conn, password string) error {
 	msg, err := readOBSMessage(reader)
 	if err != nil {
 		return err
@@ -195,7 +282,7 @@ func identifyOBS(reader *bufio.Reader, conn net.Conn) error {
 		EventSubscriptions: obsEventSubscriptionOutputs,
 	}
 	if hello.Authentication != nil {
-		identify.Authentication = obsAuthString(obsWebSocketPassword, hello.Authentication.Salt, hello.Authentication.Challenge)
+		identify.Authentication = obsAuthString(password, hello.Authentication.Salt, hello.Authentication.Challenge)
 	}
 	if err := writeOBSJSON(conn, obsMessage{Op: obsOpIdentify, Data: mustRawJSON(identify)}); err != nil {
 		return err
@@ -211,12 +298,18 @@ func identifyOBS(reader *bufio.Reader, conn net.Conn) error {
 	return nil
 }
 
-func (m *diagnosticManager) recordOBSRecordingMarker(ctx context.Context, raw json.RawMessage) {
-	marker, ok := obsRecordingMarker(m.Now(), raw)
+func (w *OBSWorker) recordOBSRecordingMarker(ctx context.Context, raw json.RawMessage) {
+	w.mu.RLock()
+	manager := w.manager
+	w.mu.RUnlock()
+	if manager == nil {
+		return
+	}
+	marker, ok := obsRecordingMarker(manager.Now(), raw)
 	if !ok {
 		return
 	}
-	_, _ = m.RecordMarker(ctx, marker)
+	_, _ = manager.RecordMarker(ctx, marker)
 }
 
 func obsRecordingMarker(now TimePoint, raw json.RawMessage) (MarkerEvent, bool) {

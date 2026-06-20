@@ -19,24 +19,24 @@
         <dd>{resourceKey(request)}</dd>
       </div>
       <div>
-        <dt>Path</dt>
-        <dd>{request.start.url_path}</dd>
-      </div>
-      <div>
-        <dt>Protocol</dt>
-        <dd>{request.start.http_proto} {request.start.alpn_protocol || ''}</dd>
+        <dt>Profile</dt>
+        <dd>{request.start.pacing_profile_name || 'unset'}</dd>
       </div>
       <div>
         <dt>TLS</dt>
         <dd>{request.start.tls_enabled ? request.start.tls_version || 'enabled' : 'off'}</dd>
       </div>
       <div>
-        <dt>Content</dt>
-        <dd>{formatBytes(request.start.content_length)}</dd>
+        <dt>Protocol</dt>
+        <dd>{request.start.http_proto} {request.start.alpn_protocol || ''}</dd>
       </div>
       <div>
-        <dt>Profile</dt>
-        <dd>{request.start.pacing_profile_name || 'unset'}</dd>
+        <dt>Path</dt>
+        <dd>{request.start.url_path}</dd>
+      </div>
+      <div>
+        <dt>Content</dt>
+        <dd>{formatBytes(request.start.content_length)}</dd>
       </div>
       <div>
         <dt>Duration</dt>
@@ -49,6 +49,10 @@
       <div>
         <dt>Status</dt>
         <dd>{request.start.response_status}</dd>
+      </div>
+      <div class="col-span-2">
+        <dt>User Agent</dt>
+        <dd>{request.start.user_agent}</dd>
       </div>
     </dl>
   {:else}

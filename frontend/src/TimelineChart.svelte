@@ -50,7 +50,9 @@
   const textColor = '#52616b'
   const chartAssignments = createTimelineChartAssignments()
 
+  const svg = $derived(svgElement ? d3.select(svgElement) : null)
   const timeline = $derived(zoom ? (zoomTimeline ?? fullTimeline) : fullTimeline)
+  const navigationDomain = $derived(fullTimeline ? timelineDomain(fullTimeline, null) : null)
   const chartData = $derived.by(() => timeline
     ? buildTimelineChartData({
       timeline,
@@ -88,6 +90,11 @@
   $effect(() => {
     if (!svgElement || !chartData || !chartLayout || !chartDomain) return
     renderChart(chartData, chartLayout, chartDomain)
+  })
+
+  $effect(() => {
+    if (!zoom || !svg || !chartLayout) return
+    drawZoomNavigationLayer(svg, chartLayout)
   })
 
   $effect(() => {
@@ -416,7 +423,8 @@
         [layout.margin.left, brushY],
         [width - layout.margin.right, brushY + brushHeight],
       ])
-      .on('end', (event: d3.D3BrushEvent<unknown>) => {
+      .on('brush end', (event: d3.D3BrushEvent<unknown>) => {
+        if (!event.sourceEvent) return
         if (!event.selection) {
           setRange(null)
           return
@@ -425,18 +433,103 @@
         setRange({
           from: Math.max(domain.from, layout.x.invert(x0)),
           to: Math.min(domain.to, layout.x.invert(x1)),
+        }, {
+          loadZoom: event.type === 'end',
         })
       })
 
     svg.append('g').attr('class', 'timeline-brush').call(brush)
+  }
 
-    // svg
-    //   .append('text')
-    //   .attr('x', layout.margin.left)
-    //   .attr('y', brushY - 7)
-    //   .attr('fill', textColor)
-    //   .attr('font-size', 11)
-    //   .text('Select a range for bottom zoom')
+  function drawZoomNavigationLayer(
+    svg: ChartSvg,
+    layout: ChartLayout,
+  ) {
+    const brushHeight = 12
+    const brushY = layout.renderedHeight - layout.margin.bottom + 6
+
+    const navigationRect = svg
+      .append('g')
+      .attr('class', 'timeline-zoom-navigation')
+      .append('rect')
+      .attr('x', layout.margin.left)
+      .attr('y', brushY)
+      .attr('width', Math.max(1, width - layout.margin.left - layout.margin.right))
+      .attr('height', brushHeight)
+      .attr('fill', 'transparent')
+      // .attr('rx', 2)
+      // .attr('fill', '#3b82f6')
+      // .attr('fill-opacity', 0.24)
+      // .attr('stroke', '#2563eb')
+      // .attr('stroke-opacity', 0.5)
+      .attr('cursor', 'grab')
+
+    navigationRect
+      .call(
+        d3
+          .drag<SVGRectElement, unknown>()
+          .on('start', function (event: d3.D3DragEvent<SVGRectElement, unknown, unknown>) {
+            d3.select(this).attr('cursor', 'grabbing')
+          })
+          .on('drag', (event: d3.D3DragEvent<SVGRectElement, unknown, unknown>) => {
+            // console.log('drag', event.dx)
+            if (!selectedRange || !navigationDomain || event.dx > 100) return
+            setRange(panRange(selectedRange, event.dx, layout, navigationDomain), { loadZoom: false })
+          })
+          .on('end', function (event: d3.D3DragEvent<SVGRectElement, unknown, unknown>) {
+            d3.select(this).attr('cursor', 'grab')
+          }),
+      )
+      .on('wheel', (event: WheelEvent) => {
+        event.preventDefault()
+        const [pointerX] = d3.pointer(event, svg.node())
+        if (!selectedRange || !navigationDomain) return
+        setRange(zoomRangeAt(selectedRange, layout.x.invert(pointerX), event.deltaY, navigationDomain), { deferLoad: true })
+      })
+  }
+
+  function panRange(range: RangeNs, deltaX: number, layout: ChartLayout, bounds: RangeNs): RangeNs {
+    const plotWidth = Math.max(1, width - layout.margin.left - layout.margin.right)
+    const deltaNs = deltaX * ((range.to - range.from) / plotWidth)
+    // console.log('pan', deltaX, deltaNs)
+    return clampRange({
+      from: range.from - deltaNs,
+      to: range.to - deltaNs,
+    }, bounds)
+  }
+
+  function zoomRangeAt(range: RangeNs, anchorNs: number, deltaY: number, bounds: RangeNs): RangeNs {
+    const rangeWidth = range.to - range.from
+    const boundsWidth = bounds.to - bounds.from
+    const minWidth = Math.max(1, boundsWidth / 1000)
+    const targetWidth = Math.min(boundsWidth, Math.max(minWidth, rangeWidth * (deltaY > 0 ? 1.16 : 1 / 1.16)))
+    const anchorRatio = Math.min(1, Math.max(0, (anchorNs - range.from) / rangeWidth))
+
+    return clampRange({
+      from: anchorNs - targetWidth * anchorRatio,
+      to: anchorNs + targetWidth * (1 - anchorRatio),
+    }, bounds)
+  }
+
+  function clampRange(range: RangeNs, bounds: RangeNs): RangeNs {
+    const boundsWidth = bounds.to - bounds.from
+    const rangeWidth = Math.min(boundsWidth, range.to - range.from)
+    let from = range.from
+    let to = range.to
+
+    if (from < bounds.from) {
+      from = bounds.from
+      to = from + rangeWidth
+    }
+    if (to > bounds.to) {
+      to = bounds.to
+      from = to - rangeWidth
+    }
+
+    return {
+      from: Math.max(bounds.from, from),
+      to: Math.min(bounds.to, to),
+    }
   }
 
   function syncSelectionBrush(svg: ChartSvg, layout: ChartLayout) {

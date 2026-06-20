@@ -7,6 +7,7 @@ import { sessions } from "./sessions.svelte"
 import { get } from "svelte/store"
 
 const SESSION_CONTEXT_KEY = Symbol('session')
+export type SessionRefreshMode = 'auto' | 'manual'
 
 export function createSessionState() {
   const state = $state({
@@ -32,7 +33,7 @@ export function createSessionState() {
 
     state.loading = true
     await Promise.all([
-      timeline.load()
+      timeline.loadFull('manual')
     ])
     await Promise.all([
       requests.load(timeline),
@@ -47,10 +48,10 @@ export function createSessionState() {
     video.clear()
   }
 
-  async function switchSession(sessionId: string, version: number) {
+  async function switchSession(sessionId: string, version: number, mode: SessionRefreshMode = 'manual') {
     if (state.sessionId === sessionId) {
-      // partial refresh
-      await timeline.loadSelectedRange()
+      await timeline.loadFull(mode)
+      await requests.load(timeline)
       return
     }
 
@@ -97,4 +98,3 @@ export function getSessionContext() {
 
   return session
 }
-

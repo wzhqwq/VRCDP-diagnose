@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { createSessionState, setSessionContext } from "./data/session-state.svelte"
+  import { untrack } from 'svelte'
+  import { createSessionState, setSessionContext, type SessionRefreshMode } from "./data/session-state.svelte"
   import Video from "./parts/Video.svelte"
   import Markers from "./parts/Markers.svelte"
   import { formatBytes, formatProcessTime } from "./utils/format"
@@ -11,11 +12,12 @@
   import GlitchForm from "./parts/GlitchForm.svelte"
 
   interface Props {
+    refreshMode: SessionRefreshMode;
     sessionId: string;
     version: number;
   }
 
-  const { sessionId, version }: Props = $props()
+  const { refreshMode, sessionId, version }: Props = $props()
 
   let rightTab = $state('requests' as 'requests' | 'video')
 
@@ -23,7 +25,12 @@
   setSessionContext(sessionState)
 
   $effect(() => {
-    sessionState.switchSession(sessionId, version)
+    const nextSessionId = sessionId
+    const nextVersion = version
+    const nextRefreshMode = refreshMode
+    untrack(() => {
+      void sessionState.switchSession(nextSessionId, nextVersion, nextRefreshMode)
+    })
   })
 
   const {

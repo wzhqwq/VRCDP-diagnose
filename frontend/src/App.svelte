@@ -4,12 +4,16 @@
   import { filteredSessions, loadSessions, sessionFilter } from "./data/sessions.svelte"
   import Session from "./Session.svelte"
   import { loadStats } from "./data/stats.svelte"
+  import type { SessionRefreshMode } from "./data/session-state.svelte"
 
   let selectedSessionId = $state('')
   let sessionVersion = $state(0)
+  let sessionRefreshMode = $state<SessionRefreshMode>('manual')
+  let autoRefresh = $state(true)
 
-  async function refresh() {
+  async function refresh(mode: SessionRefreshMode = 'manual') {
     const nextSessionId = await loadSessions(selectedSessionId)
+    sessionRefreshMode = mode
     if (nextSessionId == selectedSessionId) {
       sessionVersion++
     } else {
@@ -23,8 +27,10 @@
   }
 
   onMount(() => {
-    void refresh()
-    const interval = window.setInterval(refresh, 5000)
+    void refresh('manual')
+    const interval = window.setInterval(() => {
+      if (autoRefresh) void refresh('auto')
+    }, 5000)
     return () => {
       window.clearInterval(interval)
     }
@@ -43,7 +49,13 @@
         <p class="eyebrow">VRCDP</p>
         <h1>Diagnostics</h1>
       </div>
-      <button aria-label="Refresh diagnostics" class="icon-button" onclick={refresh} type="button">↻</button>
+      <div class="sidebar-actions">
+        <label class="auto-refresh-toggle">
+          <input bind:checked={autoRefresh} type="checkbox"/>
+          <span>Auto</span>
+        </label>
+        <button aria-label="Refresh diagnostics" class="icon-button" onclick={() => refresh('manual')} type="button">↻</button>
+      </div>
     </div>
 
     <label class="search-field">
@@ -76,5 +88,5 @@
       {/each}
     </div>
   </aside>
-  <Session sessionId={selectedSessionId} version={sessionVersion}/>
+  <Session refreshMode={sessionRefreshMode} sessionId={selectedSessionId} version={sessionVersion}/>
 </main>

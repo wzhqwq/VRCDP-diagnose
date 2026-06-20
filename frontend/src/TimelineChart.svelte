@@ -8,7 +8,15 @@
     type RequestMark,
     type TimelineChartData,
   } from './timelineChartData'
-  import { type RangeNs, timelineDomain, } from './timelineData'
+  import type { TimelineSummary } from './api'
+  import {
+    glitchesInRange,
+    markersInRange,
+    type RangeNs,
+    requestsInRange,
+    timelineDomain,
+    windowsInRange,
+  } from './timelineData'
   import { getSessionContext } from "./data/session-state.svelte"
   import { formatProcessTime } from "./utils/format"
 
@@ -21,6 +29,8 @@
     state: sessionState,
     timeline: {
       state: timelineState,
+      hasWindowRange,
+      preferredWindowMs,
       setRange,
     },
     video: {
@@ -51,7 +61,17 @@
   const chartAssignments = createTimelineChartAssignments()
 
   const svg = $derived(svgElement ? d3.select(svgElement) : null)
-  const timeline = $derived(zoom ? (zoomTimeline ?? fullTimeline) : fullTimeline)
+  const timeline = $derived.by(() => {
+    if (!zoom) return fullTimeline
+    if (!selectedRange) return fullTimeline
+
+    const preferredWindowMs = preferredWindowMsForRange(selectedRange)
+    if (preferredWindowMs === 50 && zoomTimeline && hasWindowRange(selectedRange, 50)) {
+      return timelineForRange(zoomTimeline, selectedRange, 50)
+    }
+
+    return timelineForRange(fullTimeline, selectedRange, 100)
+  })
   const navigationDomain = $derived(fullTimeline ? timelineDomain(fullTimeline, null) : null)
   const chartData = $derived.by(() => timeline
     ? buildTimelineChartData({
@@ -85,6 +105,25 @@
     axisTicks: number
     markerY1: number
     markerY2: number
+  }
+
+  function preferredWindowMsForRange(range: RangeNs) {
+    return preferredWindowMs(range)
+  }
+
+  function timelineForRange(
+    source: TimelineSummary | null,
+    range: RangeNs,
+    windowMs: 50 | 100,
+  ): TimelineSummary | null {
+    if (!source) return null
+    return {
+      session_id: source.session_id,
+      requests: requestsInRange(source.requests ?? [], range),
+      windows: windowsInRange(source.windows ?? [], range).filter((window) => window.window_ms === windowMs),
+      markers: markersInRange(source.markers ?? [], range),
+      glitches: glitchesInRange(source.glitches ?? [], range),
+    }
   }
 
   $effect(() => {

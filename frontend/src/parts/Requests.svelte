@@ -16,9 +16,9 @@
 
 </script>
 <section aria-labelledby="request-list-title" class="panel">
-  <h3 id="request-list-title">Requests</h3>
-  <div class="request-table">
-    <div class="request-row header">
+  <h3 class="text-sm font-bold" id="request-list-title">Requests</h3>
+  <div class="mt-2.5 grid gap-1.5 overflow-auto">
+    <div class="request-row bg-gray-100 text-gray-500 border-gray-200 text-sm font-bold">
       <span>Resource</span>
       <span>Profile</span>
       <span>Start</span>
@@ -27,8 +27,10 @@
     </div>
     {#each requests as request (request.request_id)}
       <button
-          class="request-row"
-          class:selected={request.request_id === selectedRequestId}
+          class={[
+            "request-row bg-white",
+            request.request_id === selectedRequestId ? "border-blue-600" : "border-gray-200",
+          ]}
           type="button"
           onclick={() => selectRequest(request)}
       >

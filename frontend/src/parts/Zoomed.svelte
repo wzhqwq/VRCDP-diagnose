@@ -34,7 +34,7 @@
     </div>
   </div>
   <TimelineChart height={300} zoom/>
-  <dl class="grid grid-cols-4 gap-2 mt-2 pt-2 border-t border-gray-300" aria-label="Summary statistics for the zoomed range">
+  <dl class="mt-2 grid grid-cols-4 gap-2 border-t border-gray-200 pt-2 max-[1180px]:grid-cols-2 max-[640px]:grid-cols-1" aria-label="Summary statistics for the zoomed range">
     <div>
       <dt>Duration</dt>
       <dd>{rangeSummary.durationMs.toFixed(0)} ms</dd>

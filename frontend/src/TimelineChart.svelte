@@ -52,12 +52,7 @@
   let svgElement = $state<SVGSVGElement | undefined>(undefined)
   let width = $state(0)
 
-  const requestColors = ['#1d766f', '#b7652c']
-  const requestMuted = ['#d8ece9', '#f3dfce']
-  const fallbackMetricColor = '#415f9f'
-  const sleepColor = '#8f579a'
-  const gridColor = '#dbe2e7'
-  const textColor = '#52616b'
+  const requestPaletteSize = 2
   const chartAssignments = createTimelineChartAssignments()
 
   const svg = $derived(svgElement ? d3.select(svgElement) : null)
@@ -77,9 +72,7 @@
     ? buildTimelineChartData({
       timeline,
       assignments: chartAssignments,
-      activeColors: requestColors,
-      mutedColors: requestMuted,
-      fallbackMetricColor,
+      paletteSize: requestPaletteSize,
     })
     : null)
   const chartDomain = $derived(timeline ? timelineDomain(timeline, zoom ? selectedRange : null) : null)
@@ -225,20 +218,20 @@
   function drawMetricDivider(svg: ChartSvg, layout: ChartLayout) {
     svg
       .append('line')
+      .attr('class', 'chart-grid-line')
       .attr('x1', layout.margin.left)
       .attr('x2', width - layout.margin.right)
       .attr('y1', layout.metricTop - 14)
       .attr('y2', layout.metricTop - 14)
-      .attr('stroke', gridColor)
   }
 
   function drawEmptyState(svg: ChartSvg, layout: ChartLayout, chartData: TimelineChartData) {
     if (chartData.lanes.length !== 0) return
     svg
       .append('text')
+      .attr('class', 'chart-muted-text')
       .attr('x', layout.margin.left)
       .attr('y', layout.margin.top + 28)
-      .attr('fill', textColor)
       .attr('font-size', 13)
       .text('No requests in this range')
   }
@@ -250,14 +243,12 @@
       .selectAll('rect.request')
       .data(chartData.requestMarks)
       .join('rect')
-      .attr('class', 'request')
+      .attr('class', (mark) => `request request-color-${mark.colorIndex}`)
       .attr('x', (mark) => layout.x(mark.startNs))
       .attr('y', (mark) => layout.margin.top + mark.laneIndex * (layout.laneHeight + layout.laneGap) + 2)
       .attr('width', (mark) => Math.max(3, layout.x(mark.endNs) - layout.x(mark.startNs)))
       .attr('height', layout.laneHeight - 6)
       .attr('rx', 4)
-      .attr('fill', (mark) => mark.mutedFill)
-      .attr('stroke', (mark) => mark.stroke)
       .attr('stroke-width', 1)
       .attr('tabindex', 0)
       .attr('role', 'button')
@@ -273,18 +264,18 @@
       const line = svg.append('g').attr('class', 'marker')
       line
         .append('line')
+        .attr('class', 'marker-line')
         .attr('x1', layout.x(marker.ns))
         .attr('x2', layout.x(marker.ns))
         .attr('y1', layout.markerY1)
         .attr('y2', layout.markerY2)
-        .attr('stroke', '#c99720')
         .attr('stroke-width', 1.5)
         .attr('stroke-dasharray', '4 4')
       line
         .append('text')
+        .attr('class', 'marker-label')
         .attr('x', layout.x(marker.ns) + 5)
         .attr('y', layout.markerY1 + 12)
-        .attr('fill', '#8a6310')
         .attr('font-size', 11)
         .text(marker.label)
     }
@@ -294,16 +285,16 @@
       const group = svg.append('g').attr('class', 'glitch')
       group
         .append('line')
+        .attr('class', 'glitch-line')
         .attr('x1', layout.x(glitch.ns))
         .attr('x2', layout.x(glitch.ns))
         .attr('y1', layout.markerY1)
         .attr('y2', layout.markerY2)
-        .attr('stroke', '#c93f3f')
         .attr('stroke-width', 2)
       group
         .append('path')
+        .attr('class', 'glitch-marker')
         .attr('d', `M ${layout.x(glitch.ns)} ${layout.markerY1 - 2} l 7 12 h -14 z`)
-        .attr('fill', '#c93f3f')
       group.append('title').text(glitch.title)
     }
   }
@@ -311,7 +302,7 @@
   function applySelectionStyles(svg: ChartSvg, selectedId: string | null) {
     svg
       .selectAll<SVGRectElement, RequestMark>('rect.request')
-      .attr('fill', (mark) => mark.requestId === selectedId ? mark.activeFill : mark.mutedFill)
+      .classed('selected', (mark) => mark.requestId === selectedId)
       .attr('stroke-width', (mark) => mark.requestId === selectedId ? 2 : 1)
 
     svg
@@ -340,12 +331,12 @@
 
     entered
       .append('line')
-      .attr('stroke', '#172027')
+      .attr('class', 'playback-cursor-line')
       .attr('stroke-width', 2)
 
     entered
       .append('text')
-      .attr('fill', '#172027')
+      .attr('class', 'playback-cursor-label')
       .attr('font-size', 11)
       .attr('font-weight', 760)
       .text('playback')
@@ -369,9 +360,9 @@
 
     svg
       .append('text')
+      .attr('class', 'chart-muted-text')
       .attr('x', 12)
       .attr('y', layout.metricTop + 16)
-      .attr('fill', textColor)
       .attr('font-size', 12)
       .attr('font-weight', 650)
       .text('Mbps')
@@ -388,11 +379,11 @@
       .selectAll('line')
       .data(y.ticks(3))
       .join('line')
+      .attr('class', 'chart-grid-line')
       .attr('x1', layout.margin.left)
       .attr('x2', width - layout.margin.right)
       .attr('y1', (tick) => y(tick))
       .attr('y2', (tick) => y(tick))
-      .attr('stroke', gridColor)
       .attr('stroke-dasharray', '2 5')
 
     const metricLine = d3
@@ -406,8 +397,8 @@
       .selectAll('path')
       .data(chartData.metricSeries)
       .join('path')
+      .attr('class', (series) => `metric-line metric-color-${series.colorIndex}`)
       .attr('fill', 'none')
-      .attr('stroke', (series) => series.color)
       .attr('stroke-opacity', 0.95)
       .attr('stroke-width', 1.8)
       .attr('d', (series) => metricLine(series.points))
@@ -427,8 +418,8 @@
         .selectAll('path')
         .data(chartData.metricSeries)
         .join('path')
+        .attr('class', 'sleep-line')
         .attr('fill', 'none')
-        .attr('stroke', sleepColor)
         .attr('stroke-opacity', 0.8)
         .attr('stroke-width', 1.4)
         .attr('stroke-dasharray', '5 4')
@@ -436,9 +427,9 @@
 
       svg
         .append('text')
+        .attr('class', 'sleep-label')
         .attr('x', width - layout.margin.right - 132)
         .attr('y', layout.metricTop + 16)
-        .attr('fill', sleepColor)
         .attr('font-size', 11)
         .text('sleep actual')
     }
@@ -496,11 +487,6 @@
       .attr('width', Math.max(1, width - layout.margin.left - layout.margin.right))
       .attr('height', brushHeight)
       .attr('fill', 'transparent')
-      // .attr('rx', 2)
-      // .attr('fill', '#3b82f6')
-      // .attr('fill-opacity', 0.24)
-      // .attr('stroke', '#2563eb')
-      // .attr('stroke-opacity', 0.5)
       .attr('cursor', 'grab')
 
     navigationRect

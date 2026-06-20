@@ -9,7 +9,7 @@
 <article class="panel flex flex-col gap-2">
   <h3>Selected request</h3>
   {#if request}
-    <dl class="grid grid-cols-2 gap-2">
+    <dl class="grid grid-cols-2 gap-2 max-[640px]:grid-cols-1">
       <div>
         <dt>ID</dt>
         <dd>{request.request_id}</dd>

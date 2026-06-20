@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte"
+  import { Pause, Play, Upload, Video as VideoIcon } from "@lucide/svelte"
 
   import { formatProcessTime } from "../utils/format"
   import { getSessionContext } from "../data/session-state.svelte"
@@ -44,15 +45,29 @@
 <article class="panel video-panel">
   <div class="panel-title-row compact-title-row">
     <div>
-      <h3>OBS video</h3>
+      <h3 class="inline-flex items-center gap-2">
+        <VideoIcon aria-hidden="true" class="size-4"/>
+        OBS video
+      </h3>
       <p>{playbackCursor === null ? 'No cursor' : formatProcessTime(playbackCursor)}</p>
     </div>
-    <span class="status-pill">{paused ? 'Paused' : 'Playing'}</span>
+    <span class="status-pill inline-flex items-center gap-1.5">
+      {#if paused}
+        <Pause aria-hidden="true" class="size-3.5"/>
+        Paused
+      {:else}
+        <Play aria-hidden="true" class="size-3.5"/>
+        Playing
+      {/if}
+    </span>
   </div>
 
   <label>
-    <span>Video file</span>
-    <input accept="video/*" onchange={handleVideoFileChange} type="file"/>
+    <span class="inline-flex items-center gap-1.5">
+      <Upload aria-hidden="true" class="size-3.5"/>
+      Video file
+    </span>
+    <input class="file:mr-3 file:rounded-md file:border-0 file:bg-blue-600 file:px-3 file:py-1.5 file:text-sm file:font-bold file:text-white" accept="video/*" onchange={handleVideoFileChange} type="file"/>
   </label>
 
   <label>

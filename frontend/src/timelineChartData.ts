@@ -18,16 +18,14 @@ export interface RequestMark {
   laneIndex: number
   startNs: number
   endNs: number
-  activeFill: string
-  mutedFill: string
-  stroke: string
+  colorIndex: number
   title: string
 }
 
 export interface MetricSeries {
   requestId: string
   points: MetricPoint[]
-  color: string
+  colorIndex: number
   title: string
 }
 
@@ -62,14 +60,11 @@ export interface TimelineChartData {
 interface BuildTimelineChartDataOptions {
   timeline: TimelineSummary
   assignments: TimelineChartAssignments
-  activeColors: string[]
-  mutedColors: string[]
-  fallbackMetricColor: string
+  paletteSize: number
 }
 
 interface RequestColorsById {
-  active: Record<string, string>
-  muted: Record<string, string>
+  index: Record<string, number>
 }
 
 export function createTimelineChartAssignments(): TimelineChartAssignments {
@@ -83,15 +78,13 @@ export function createTimelineChartAssignments(): TimelineChartAssignments {
 export function buildTimelineChartData({
   timeline,
   assignments,
-  activeColors,
-  mutedColors,
-  fallbackMetricColor,
+  paletteSize,
 }: BuildTimelineChartDataOptions): TimelineChartData {
   const requests = timeline.requests ?? []
   const metrics = timeline.windows ?? []
-  const requestColors = requestColorsByResource(requests, assignments, activeColors, mutedColors)
+  const requestColors = requestColorsByResource(requests, assignments, paletteSize)
   const lanes = buildRequestLanes(requests, assignments)
-  const requestMarks = buildRequestMarks(lanes, requestColors, activeColors, mutedColors)
+  const requestMarks = buildRequestMarks(lanes, requestColors)
   const metricSeries = metricsByRequest(metrics).map((series) => ({
     requestId: series.requestId,
     points: series.metrics.map((metric) => ({
@@ -99,7 +92,7 @@ export function buildTimelineChartData({
       effectiveMbps: metric.effective_mbps,
       maxSleepActualNs: metric.max_sleep_actual_ns,
     })),
-    color: requestColors.active[series.requestId] ?? fallbackMetricColor,
+    colorIndex: requestColors.index[series.requestId] ?? 0,
     title: `${series.requestId}\n${series.metrics.length} metric windows`,
   }))
 
@@ -117,8 +110,6 @@ export function buildTimelineChartData({
 function buildRequestMarks(
   lanes: RequestLane[],
   requestColors: RequestColorsById,
-  activeColors: string[],
-  mutedColors: string[],
 ): RequestMark[] {
   return lanes.flatMap((lane) =>
     lane.requests.map((request) => {
@@ -129,9 +120,7 @@ function buildRequestMarks(
         laneIndex: lane.index,
         startNs: requestStartNs(request),
         endNs: requestEndNs(request),
-        activeFill: requestColors.active[requestId] ?? activeColors[0],
-        mutedFill: requestColors.muted[requestId] ?? mutedColors[0],
-        stroke: requestColors.active[requestId] ?? activeColors[0],
+        colorIndex: requestColors.index[requestId] ?? 0,
         title: `${requestId}\n${request.start.url_path}\n${request.start.pacing_profile_name || 'profile unknown'}`,
       }
     }),
@@ -141,21 +130,17 @@ function buildRequestMarks(
 function requestColorsByResource(
   requests: RequestSummary[],
   assignments: TimelineChartAssignments,
-  activeColors: string[],
-  mutedColors: string[],
+  paletteSize: number,
 ): RequestColorsById {
-  const active: Record<string, string> = {}
-  const muted: Record<string, string> = {}
+  const index: Record<string, number> = {}
 
   for (const request of sortedRequests(requests)) {
     const key = resourceKey(request)
     assignments.resourceColorByKey[key] ??= assignments.nextResourceColorIndex++
-    const colorIndex = assignments.resourceColorByKey[key] % activeColors.length
-    active[request.request_id] = activeColors[colorIndex]
-    muted[request.request_id] = mutedColors[colorIndex]
+    index[request.request_id] = assignments.resourceColorByKey[key] % paletteSize
   }
 
-  return { active, muted }
+  return { index }
 }
 
 function buildRequestLanes(requests: RequestSummary[], assignments: TimelineChartAssignments): RequestLane[] {

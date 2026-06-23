@@ -240,6 +240,10 @@ label span {
   @apply stroke-teal-500;
 }
 
+.marker-label-background {
+  @apply fill-teal-50 stroke-teal-500;
+}
+
 .marker-label {
   @apply fill-teal-700;
 }
@@ -261,11 +265,20 @@ label span {
 }
 
 .timeline-brush .selection {
-  @apply fill-blue-500/60;
+  @apply fill-blue-500/30 hover:fill-blue-500/60;
 }
 
 .timeline-brush .handle {
-  @apply fill-blue-500;
+  @apply fill-blue-400 hover:fill-blue-500;
+}
+
+.timeline-zoom-navigation {
+  @apply fill-transparent hover:fill-blue-500/30 data-[state=active]:fill-blue-500/50;
+  @apply cursor-grab data-[state=active]:cursor-grabbing;
+}
+
+.time-axis {
+  @apply pointer-events-none;
 }
 
 .playback-cursor line {

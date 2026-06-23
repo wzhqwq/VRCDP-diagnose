@@ -40,19 +40,15 @@
   })
 
   const {
-    timeline: { maxMbps, currentDomain, setRange },
+    timeline: { maxMbps },
     requests: { totalBytesServed },
     loadAll,
   } = sessionState
 
   const session = $derived(sessionState.state.session)
   const loading = $derived(sessionState.state.loading)
-  const selectedRange = $derived(sessionState.timeline.state.selectedRange)
   const servedBytes = $derived(formatBytes(totalBytesServed()))
   const maxMbpsFixed = $derived(maxMbps().toFixed(1))
-  const rangeText = $derived(
-    `${formatProcessTime(currentDomain().from)} to ${formatProcessTime(currentDomain().to)}`,
-  )
 </script>
 
 <section aria-label="Current diagnostic session" class="min-w-0 p-[22px] max-[860px]:p-4">
@@ -116,21 +112,6 @@
           </article>
         </section>
         <section class="panel" aria-labelledby="main-timeline-title">
-          <div class="panel-title-row">
-            <div>
-              <h3 id="main-timeline-title">Session timeline</h3>
-              <p>{rangeText}</p>
-            </div>
-            <button
-              class="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 text-sm font-bold hover:border-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-55"
-              type="button"
-              onclick={() => setRange(null)}
-              disabled={!selectedRange}
-            >
-              <X aria-hidden="true" class="size-4" />
-              Range
-            </button>
-          </div>
           <TimelineChart />
           <Markers />
         </section>

@@ -17,6 +17,7 @@ func newAPIHandler(manager *diagnosticManager) http.Handler {
 	h := apiHandler{
 		manager: manager,
 		apiMux:  http.NewServeMux(),
+		static:  http.FileServerFS(staticFS{}),
 	}
 	h.RegisterHandlers()
 	return h
@@ -36,7 +37,6 @@ func (h apiHandler) RegisterHandlers() {
 	h.apiMux.HandleFunc("/api/requests/{request_id}", h.handleRequest)
 	h.apiMux.HandleFunc("/api/requests/{request_id}/windows", h.handleRequestWindows)
 	h.apiMux.HandleFunc("/api/requests/{request_id}/chunks", h.handleRequestChunks)
-	h.static = http.FileServerFS(staticFS{})
 }
 
 func (h apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
